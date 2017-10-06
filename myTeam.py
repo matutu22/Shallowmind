@@ -351,7 +351,7 @@ class OffensiveAgent(QAgent):
         numCarrying = state.data.agentStates[self.index].numCarrying
 
         #isRed = int(self.red)
-        isPacman = int(state.getAgentState(self.index).isPacman)
+        isPacman = int(successor.getAgentState(self.index).isPacman)
 
         # TODO modify, as this is not exactly to check if the agent is moving to base
         isMovingToBase = int(self.quickGetDistance(self.startPos, nextP) < self.quickGetDistance(self.startPos, nowP))
