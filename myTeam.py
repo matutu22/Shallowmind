@@ -445,6 +445,36 @@ class DefensiveAgent(QAgent):
 
         QAgent.__init__(self, index, episodeCount, alpha, gamma, epsilon, path)
 
+
+    def getEnemyPosition(self, state):
+        lastState = self.getPreviousObservation()
+        currentFoodList = self.getFoodYouAreDefending(state).asList()
+        currentCap = self.getCapsulesYouAreDefending(state).asList()
+
+
+        opponents = [state.getAgentState(i) for i in self.getOpponents(state)]
+        opponentsP = []
+        for opponent in opponents:
+            if opponent and opponent.isPacman and opponent.getPosition():
+                opponentsP.append(opponent)
+
+        if lastState:
+            lastFoodList = self.getFoodYouAreDefending(lastState).asList()
+            lastCap = self.getCapsulesYouAreDefending(lastState).asList()
+
+            foodEaten = set(currentFoodList) - set(lastFoodList)
+            capEaten = set(currentCap) - set(lastCap)
+            if foodEaten:
+                for food in foodEaten:
+                    if food not in opponentsP:
+                        opponentsP.append(food)
+            if capEaten:
+                for cap in capEaten:
+                    if cap not in opponentsP:
+                        opponentsP.append(cap)
+
+        return opponentsP
+
     def minDistanceToEnemy(self, state, position):
         opponents = [state.getAgentState(i) for i in self.getOpponents(state)]
 
@@ -542,7 +572,7 @@ class DefensiveAgent(QAgent):
         meetEnemy = False
         for opponent in currentOpponents:
             if opponent and opponent.isPacman and opponent.getPosition() is not None:
-                if newState.getAgentPosition(self.index) == opponent.getPosition:
+                if newState.getAgentPosition(self.index) == opponent.getPosition():
                     meetEnemy = True
 
         # meetEnemy = newState.getAgentPosition(self.index) in currentOpponents
