@@ -404,7 +404,6 @@ class OffensiveAgent(QAgent):
             # currently we dont punish the offensive agent when it gets eaten as a scared ghost
             # cuz that would make it try to avoid enemy even in our side (which is wrong in most cases)
             elif nowPos == self.startPos and oldState.data.agentStates[self.index].isPacman:
-                print "get eaten!!!"
                 reward = -100 + oldState.data.agentStates[self.index].numCarrying * (-10)
             else:
 
@@ -438,7 +437,6 @@ class OffensiveAgent(QAgent):
                 else:
                     reward = -2
                 """
-
         return reward
 
 class DefensiveAgent(QAgent):
