@@ -64,7 +64,7 @@ class QAgent(CaptureAgent):
         self.alpha = alpha
         self.gamma = gamma
         self.epsilon = epsilon
-        self.path = path
+        self.path =  "./teams/ShallowMind/"  + path
         self.startPos = None
         self.lastAction = None
 
@@ -82,20 +82,16 @@ class QAgent(CaptureAgent):
 
         self.q = util.Counter()
 
-        filePath = "classical-" + self.path
-
-        with open(filePath) as f:
+        with open(self.path) as f:
             tmp = json.load(f)
             for k,v in tmp.iteritems():
                 self.q[ast.literal_eval(k)] = v
 
     def saveQ(self):
 
-        filePath = "classical-" + self.path
+        print "Saving Q to " + self.path + "..."
 
-        print "Saving Q to " + filePath + "..."
-
-        with open(filePath, 'w') as f:
+        with open(self.path, 'w') as f:
             json.dump({str(k): v for k, v in self.q.iteritems()}, f)
 
     def registerInitialState(self, gameState):
@@ -264,20 +260,16 @@ class LinearQAgent(QAgent):
 
         self.w = util.Counter()
 
-        filePath = "linear-" + self.path
-
-        with open(filePath) as f:
+        with open(self.path) as f:
             tmp = json.load(f)
             for k,v in tmp.iteritems():
                 self.w[k] = v
 
     def saveW(self):
 
-        filePath = "linear-" + self.path
+        print "Saving W to " + self.path + "..."
 
-        print "Saving W to " + filePath + "..."
-
-        with open(filePath, 'w') as f:
+        with open(self.path, 'w') as f:
             json.dump({k: v for k, v in self.w.iteritems()}, f)
 
     def getQValue(self, features):
@@ -304,7 +296,7 @@ class LinearQAgent(QAgent):
 
 class OffensiveAgent(QAgent):
 
-    def __init__(self, index, episodeCount = 1000, alpha = 0.2, gamma = 0.8, epsilon = 0.05, path = "offense.json"):
+    def __init__(self, index, episodeCount = 1000, alpha = 0.2, gamma = 0.8, epsilon = 0.05, path = "offenseB.json"):
 
         QAgent.__init__(self, index, episodeCount, alpha, gamma, epsilon, path)
 
