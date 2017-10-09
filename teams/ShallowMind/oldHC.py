@@ -14,7 +14,7 @@
 
 from captureAgents import CaptureAgent
 import random, time, util
-from game import Directions, Actions
+from game import Directions
 import game
 
 #################
@@ -42,32 +42,6 @@ def createTeam(firstIndex, secondIndex, isRed,
   return [eval(first)(firstIndex), eval(second)(secondIndex)]
 
 
-MAX_DISTANCE = 999999
-
-CAPSULE_BETTER_THAN_FOOD = 6
-
-# when enemy's ghost timer <= SCARED_TIMER_BOTTOM, regard it as over
-SCARED_TIMER_BOTTOM = 5
-
-# enemy is visible only when the Manhattan distance <= SIGHT_RANGE
-SIGHT_RANGE = 5
-
-# maximum steps for a agent
-MAX_STEP = 300
-
-# last moment
-LAST_MOMENT = 33
-
-# if 2 agents' distance <= MAX_HIT_DISTANCE, they might hit in the next step
-MAX_HIT_DISTANCE = 2
-
-# sometimes this dumb agent goes insane
-INSANE_PROBABILITY = 0.15
-
-# CHANGE STATE WHEN SCORE >= RestFood * SCORE_RATIO
-SCORE_RATIO = 1.5
-
-
 # a Dumb Quirky Naive agent
 class DumbDefensiveAgent(CaptureAgent):
 
@@ -81,7 +55,6 @@ class DumbDefensiveAgent(CaptureAgent):
         self.homes = self.getHomeInMid()
         self.startPos = state.getAgentState(self.index).getPosition()
         self.enemyStartPos = [state.getAgentState(i).getPosition() for i in self.getOpponents(state)][0]
-        self.step = 0
 
         self.cachedDistance = {}
 
@@ -93,7 +66,6 @@ class DumbDefensiveAgent(CaptureAgent):
         # do not get these status based on self.getPreviousObservation
         self.lastMyFoods = self.getFoodYouAreDefending(state)
         self.lastInvadingEnemyPos = []
-        self.lastAllCapules = self.getAllCapsules(state)
 
         self.computeDeadEnds(state)
 
@@ -130,6 +102,17 @@ class DumbDefensiveAgent(CaptureAgent):
             for y in range(1, self.height - 1):
                 print (x,y) , ":", self.getLegalNeighbors((x, y))
         """
+
+
+    # return next state based on action, can be used to obtain next own position
+    def getNextState(self, state, action):
+        successor = state.generateSuccessor(self.index, action)
+        pos = successor.getAgentState(self.index).getPosition()
+
+        if pos != util.nearestPoint(pos):
+            return successor.generateSuccessor(self.index, action)
+        else:
+            return successor
 
     # return capsules of both sides
     def getAllCapsules(self, state):
@@ -170,11 +153,6 @@ class DumbDefensiveAgent(CaptureAgent):
 
         return neighborList
 
-    # return the next position performing action at current position
-    # this doesn't consider if the action is legal or not
-    def getNextPos(self, currentPos, action):
-        return Actions.getSuccessor(currentPos, action)
-
     # get distance quickly, generally pass food as pos1
     def quickGetDistance(self, pos1, pos2):
 
@@ -188,20 +166,14 @@ class DumbDefensiveAgent(CaptureAgent):
 
         return self.cachedDistance[key]
 
-    def getManhattanDistance(self, pos1, pos2):
-        if pos1 is None or pos2 is None:
-            return None
-
-        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
-
     # among a bunch of targets' positions, which one is the closest to source
     # return position, or None if failed
-    def quickFindClosetPosInList(self, source, targets):
+    def quickFindMinDisInList(self, source, targets):
 
         if source is None or targets is None or len(targets) <= 0:
             return None
 
-        minDis = MAX_DISTANCE
+        minDis = 9999999
         minP = None
 
         for target in targets:
@@ -293,41 +265,35 @@ class DumbDefensiveAgent(CaptureAgent):
         return enemyPositions
 
     # return positions of visible unscared ghost enemies
-    # NOTICE: this will ignore the ghosts that are visible to my teammates but too far away from myself
     def getUnscaredGhostEnemyPositions(self, state):
 
         enemyPositions = []
 
-        myPos = state.getAgentState(self.index).getPosition()
-
         for index in self.getOpponents(state):
             enemyState = state.getAgentState(index)
             pos = enemyState.getPosition()
-            if (not enemyState.isPacman and pos is not None
-            and enemyState.scaredTimer <= SCARED_TIMER_BOTTOM
-            and self.getManhattanDistance(myPos, pos) <= SIGHT_RANGE + MAX_HIT_DISTANCE):
+            if not enemyState.isPacman and pos is not None and enemyState.scaredTimer <=0:
                 enemyPositions.append(pos)
 
         return enemyPositions
 
-    # return a action moving toward or away from the target
-    # when there are multiple choices, randomly choose one
+    # return a action list moving toward or away from the target
     def movingRelativeToTarget(self, state, target, isCloser = True):
 
         if target is None:
-            return None
+            return {}
 
         actions = state.getLegalActions(self.index)
 
         results = {}
 
         for action in actions:
-            nextPos = self.getNextPos(state.getAgentState(self.index).getPosition(), action)
-            distance = self.quickGetDistance(target, nextPos)
+            successor = self.getNextState(state, action)
+            distance = self.quickGetDistance(target, successor.getAgentPosition(self.index))
             results[action] = distance
 
         if len(results) <= 0:
-            return None
+            return {}
 
         if isCloser:
             bestValue = min(results.itervalues())
@@ -336,7 +302,7 @@ class DumbDefensiveAgent(CaptureAgent):
 
         bestActions = [key for key in results.keys() if results[key] == bestValue]
 
-        if len(bestActions) <= 0:
+        if bestActions is None:
             return None
 
         return random.choice(bestActions)
@@ -420,90 +386,40 @@ class DumbDefensiveAgent(CaptureAgent):
 
         enemies = self.getInvadingEnemyPositions(state)
 
+        closetEmemy = self.quickFindMinDisInList(myPos, enemies)
 
-        closetEmemy = self.quickFindClosetPosInList(myPos, enemies)
-
-        # no visible enemies, use their last positions
         if closetEmemy is None:
-            closetEmemy = self.quickFindClosetPosInList(myPos, self.lastInvadingEnemyPos)
+
+            closetEmemy = self.quickFindMinDisInList(myPos, self.lastInvadingEnemyPos)
 
         if closetEmemy is not None:
             return self.movingRelativeToTarget(state, closetEmemy, True)
 
         # no idea where are the enemies
         else:
-            mostPossibleFood = self.quickFindClosetPosInList(self.enemyStartPos, self.getFoodYouAreDefending(state).asList())
-            mostPossibleCapsule = self.quickFindClosetPosInList(self.enemyStartPos, self.getCapsulesYouAreDefending(state))
+            mostPossibleFood = self.quickFindMinDisInList(self.enemyStartPos, self.getFoodYouAreDefending(state).asList())
+            mostPossibleCapsule = self.quickFindMinDisInList(self.enemyStartPos, self.getCapsulesYouAreDefending(state))
 
-            possibleDisToFood = MAX_DISTANCE
-            possibleDisToCapsule = MAX_DISTANCE
+            possibleDisToFood = 999999
+            possibleDisToCapsule = 999999
 
             if mostPossibleFood is not None:
                 possibleDisToFood = self.quickGetDistance(self.enemyStartPos, mostPossibleFood)
 
             if mostPossibleCapsule is not None:
-                # should tend to defend capsule,  minus CAPSULE_BETTER_THAN_FOOD
-                possibleDisToCapsule = self.quickGetDistance(self.enemyStartPos, mostPossibleCapsule) - CAPSULE_BETTER_THAN_FOOD
+                # tend to defend capsule
+                possibleDisToCapsule = self.quickGetDistance(self.enemyStartPos, mostPossibleCapsule) - 6
 
-            chosenDest = None
             if possibleDisToCapsule < possibleDisToFood:
-                chosenDest = mostPossibleCapsule
-            elif mostPossibleFood is not None:
-                chosenDest = mostPossibleFood
-
-            if chosenDest is not None:
-                # move to a pos in mid (self.homes) close to the dest, or just to the dest
-                posInMid = self.quickFindClosetPosInList(chosenDest, self.homes)
-
-                # to the pos in the mid of map
-                if posInMid is not None and self.quickGetDistance(chosenDest, posInMid) <= SIGHT_RANGE:
-                    return self.movingRelativeToTarget(state, posInMid, True)
-                # to that food/capsule
-                else:
-                    return self.movingRelativeToTarget(state, chosenDest, True)
+                return self.movingRelativeToTarget(state, mostPossibleCapsule, True)
+            else:
+                if mostPossibleFood is not None:
+                    return self.movingRelativeToTarget(state, mostPossibleFood, True)
 
         return None
 
 
-    # find a safe and closest pos in intendedList
-    # return the (bestPos, bestDis), (None, MAX_DISTANCE) if all is unsafe
-    def findBestSafeChoiceAmong(self, myPos, intendedList, ghostList):
-
-        bestPos = None
-        bestPosDis = MAX_DISTANCE
-
-        if len(intendedList) > 0:
-            for pos in intendedList:
-                minGhostToFood = self.quickFindClosetPosInList(pos, ghostList)
-                if minGhostToFood is None or self.quickGetDistance(pos, myPos) < self.quickGetDistance(pos, minGhostToFood):
-                    if self.quickGetDistance(pos, myPos) < bestPosDis:
-                        bestPosDis = self.quickGetDistance(pos, myPos)
-                        bestPos = pos
-
-        return (bestPos, bestPosDis)
-
-    # find a probably unsafe but closest pos in intendedList
-    # return the (bestPos, bestDis), (None, MAX_DISTANCE) if all is too unsafe
-    def findBestUnsafeChoiceAmong(self, myPos, intendedList, ghostList):
-
-        bestPos = None
-        bestPosDis = MAX_DISTANCE
-
-        if len(intendedList) > 0:
-            for pos in intendedList:
-                minGhostToFood = self.quickFindClosetPosInList(pos, ghostList)
-                if (minGhostToFood is None
-                or self.quickGetDistance(pos, myPos) < self.quickGetDistance(pos, minGhostToFood)
-                or (self.quickGetDistance(myPos, minGhostToFood) > MAX_HIT_DISTANCE * 2
-                    and self.quickGetDistance(pos, minGhostToFood) > SIGHT_RANGE)):
-                    if self.quickGetDistance(pos, myPos) < bestPosDis:
-                        bestPosDis = self.quickGetDistance(pos, myPos)
-                        bestPos = pos
-
-        return (bestPos, bestPosDis)
-
-
-    # find a shortest path to capsule or parameter foods
+    # find a shortest path to one of these food
     def goForThem(self, state, foods):
 
         myPos = state.getAgentState(self.index).getPosition()
@@ -511,28 +427,30 @@ class DumbDefensiveAgent(CaptureAgent):
         visibleGhosts = self.getUnscaredGhostEnemyPositions(state)
 
         bestFood = None
-        bestFoodDis = MAX_DISTANCE
+        bestFoodDis = 999999
 
-        bestFood, bestFoodDis = self.findBestSafeChoiceAmong(myPos, foods, visibleGhosts)
+        if len(foods) > 0:
+            for food in foods:
+                minGhostToFood = self.quickFindMinDisInList(food, visibleGhosts)
+                if minGhostToFood is None or self.quickGetDistance(food, myPos) < self.quickGetDistance(food, minGhostToFood):
+                    if self.quickGetDistance(food, myPos) < bestFoodDis:
+                        bestFoodDis = self.quickGetDistance(food, myPos)
+                        bestFood = food
 
         capsules = self.getCapsules(state)
 
-        bestCapsule, bestCapsuleDis =  self.findBestSafeChoiceAmong(myPos, capsules, visibleGhosts)
-
-        # find probably unsafe choice
-        if bestCapsule is None and bestFood is None:
-            bestFood, bestFoodDis = self.findBestUnsafeChoiceAmong(myPos, foods, visibleGhosts)
-            bestCapsule, bestCapsuleDis =  self.findBestUnsafeChoiceAmong(myPos, capsules, visibleGhosts)
+        bestCapsule = None
+        bestCapsuleDis = 999999
 
         if len(capsules) > 0:
             for capsule in capsules:
-                minGhostToCapsule = self.quickFindClosetPosInList(capsule, visibleGhosts)
+                minGhostToCapsule = self.quickFindMinDisInList(capsule, visibleGhosts)
                 if minGhostToCapsule is None or self.quickGetDistance(capsule, myPos) < self.quickGetDistance(capsule, minGhostToCapsule):
                     if self.quickGetDistance(capsule, myPos) < bestCapsuleDis:
                         bestCapsuleDis = self.quickGetDistance(capsule, myPos)
                         bestCapsule = capsule
 
-        if bestCapsuleDis - (CAPSULE_BETTER_THAN_FOOD - 1) < bestFoodDis:
+        if bestCapsuleDis - 5 < bestFoodDis:
             if bestCapsule is not None:
                 return self.movingRelativeToTarget(state, bestCapsule)
 
@@ -574,59 +492,22 @@ class DumbDefensiveAgent(CaptureAgent):
             safeHouses = self.homes
         else:
             for home in self.homes:
-                if self.quickGetDistance(home, myPos) < self.quickGetDistance(home, self.quickFindClosetPosInList(home, visibleGhosts)):
+                if self.quickGetDistance(home, myPos) < self.quickGetDistance(home, self.quickFindMinDisInList(home, visibleGhosts)):
                     safeHouses.append(home)
 
         if len(safeHouses) > 0:
-            dest = self.quickFindClosetPosInList(myPos, safeHouses)
+            dest = self.quickFindMinDisInList(myPos, safeHouses)
             return self.movingRelativeToTarget(state, dest)
 
         return None
 
-    # random move
+    # randomly move
     def randomMove(self, state):
 
         return random.choice(state.getLegalActions(self.index))
 
-    # randomly choose a safe move if possible
-    # NOTICE: wont pick the safest choice
-    def safeRandomMove(self, state):
 
-        actions = []
-
-        ghosts = self.getUnscaredGhostEnemyPositions(state)
-
-        # no enemy around here
-        if len(ghosts) <= 0:
-            return randomMove(state)
-
-        myPos = state.getAgentState(self.index).getPosition()
-
-        for action in state.getLegalActions(self.index):
-            nextPos = self.getNextPos(myPos, action)
-            closetEmemy = self.quickFindClosetPosInList(nextPos, ghosts)
-            if self.quickGetDistance(nextPos, closetEmemy) >= MAX_HIT_DISTANCE:
-                actions.append(action)
-
-        if len(actions) > 0:
-            return random.choice(actions)
-
-        return self.randomMove(state)
-
-    def updateMyStatus(self, state):
-
-        # capsule changed, recompute all the dead ends
-        if len(self.getAllCapsules(state)) < len(self.lastAllCapules):
-            self.computeDeadEnds(state)
-
-        # update last Status
-        self.lastMyFoods = self.getFoodYouAreDefending(state)
-        self.lastInvadingEnemyPos = self.getInvadingEnemyPositions(state)
-        self.lastAllCapules = self.getAllCapsules(state)
-        self.step += 1
-
-    # for each step, only one of defensiveAction and offensiveAction should be called
-    def defensiveAction(self, state):
+    def chooseAction(self, state):
 
         ownState = state.getAgentState(self.index)
 
@@ -634,8 +515,7 @@ class DumbDefensiveAgent(CaptureAgent):
 
         action = None
 
-        # temporarily become slightly offensive if scared
-        # do not call offensiveAction!
+        # temporarily become offensive is scared
         if scaredTimer > 0:
             self.clearDDChasingBuff()
             action = self.offend(state)
@@ -648,60 +528,21 @@ class DumbDefensiveAgent(CaptureAgent):
             action  = self.moveBackHome(state)
 
         else:
+
             action = self.chaseDeadEnd(state)
+
             if action is None:
                 action = self.defend(state)
 
         if action is None:
             action = self.randomMove(state)
 
-        self.updateMyStatus(state)
+        # update last Status
+        self.lastMyFoods = self.getFoodYouAreDefending(state)
+        self.lastInvadingEnemyPos = self.getInvadingEnemyPositions(state)
+
 
         return action
-
-    def offensiveAction(self, state):
-
-        ownState = state.getAgentState(self.index)
-
-        action = None
-
-        # TODO check the distance between home and nearest food
-        if ownState.numCarrying >= 8 or (ownState.numCarrying > 0 and MAX_STEP - self.step < LAST_MOMENT):
-            action = self.moveBackHome(state)
-
-        if action is None:
-            action = self.offend(state)
-
-        if action is None and ownState.numCarrying > 2:
-            action  = self.moveBackHome(state)
-
-        if action is None:
-            action = self.offendAtRisk(state)
-
-        if action is None:
-            if util.flipCoin(INSANE_PROBABILITY):
-                action = self.randomMove(state)
-            else:
-                action = self.safeRandomMove(state)
-
-        self.updateMyStatus(state)
-
-        return action
-
-    # called by the system
-    def chooseAction(self, state):
-
-        numMyFoodLeft = len(self.getFoodYouAreDefending(state).asList())
-
-        # lost too much food, no longer should defend
-        if self.getScore(state) <= (-1) * numMyFoodLeft * SCORE_RATIO:
-            return self.offensiveAction(state)
-
-        # last moment!
-        if MAX_STEP - self.step < LAST_MOMENT and self.getScore(state) < 0:
-            return self.offensiveAction(state)
-
-        return self.defensiveAction(state)
 
 
 # another Dumb Quirky Naive agent for offense
@@ -709,24 +550,35 @@ class DumbOffensiveAgent(DumbDefensiveAgent):
 
     def chooseAction(self, state):
 
-        numTheirFoodLeft = len(self.getFood(state).asList())
+        ownState = state.getAgentState(self.index)
 
-        if self.getScore(state) >= numTheirFoodLeft * SCORE_RATIO:
+        action = None
 
-            # carrying food, moveBackHome first
-            if state.getAgentState(self.index).numCarrying > 0:
-                action = self.moveBackHome(state)
-                if action is None:
-                    if util.flipCoin(INSANE_PROBABILITY):
-                        action = self.randomMove(state)
-                    else:
-                        action = self.safeRandomMove(state)
+        # TODO check the distance between home and nearest food
+        if ownState.numCarrying > 8:
+            action = self.moveBackHome(state)
 
-                return action
+        if action is not None:
+            return action
 
-            if util.flipCoin(INSANE_PROBABILITY):
-                return self.randomMove(state)
-            else:
-                return self.defensiveAction(state)
+        action = self.offend(state)
+        if action is None and ownState.numCarrying > 0:
+            action  = self.moveBackHome(state)
 
-        return self.offensiveAction(state)
+        if action is not None:
+            return action
+
+        if action is None:
+            action = self.offendAtRisk(state)
+
+        if not ownState.isPacman:
+            self.defend(state)
+
+        if action is None:
+            action = self.randomMove(state)
+
+        # update last Status
+        self.lastMyFoods = self.getFoodYouAreDefending(state)
+        self.lastInvadingEnemyPos = self.getInvadingEnemyPositions(state)
+
+        return action
