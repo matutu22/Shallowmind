@@ -18,6 +18,7 @@ from game import Directions, Actions
 import game
 import json
 import ast
+from collections import defaultdict
 
 #################
 # Team creation #
@@ -206,6 +207,9 @@ class DumbDefensiveAgent(CaptureAgent):
         self.chasingTarget = None
         self.chasingDest = None
 
+        # only used for offensive agent
+        self.movingSequence = []
+
         # last status, make sure update this in chooseAction
         # do not get these status based on self.getPreviousObservation
         self.lastMyFoods = self.getFoodYouAreDefending(state)
@@ -214,6 +218,7 @@ class DumbDefensiveAgent(CaptureAgent):
         self.lastPosSeq = []
 
         self.computeDeadEnds(state)
+        self.aps = [realAP for realAP in self.getArticulationNode(state) if realAP not in self.deadEnds]
 
         # IMPORTANT!!!! ESPECIALLY FOR SUBCLASS QOffensiveAgent
         random.seed(time.time())
@@ -221,20 +226,24 @@ class DumbDefensiveAgent(CaptureAgent):
         """
         import sys
         #print the map
-        for y in reversed(range(self.height)):
-            for x in range(self.width):
+        #for y in reversed(range(self.height)):
+            #for x in range(self.width):
                 if self.walls[x][y]:
                     sys.stdout.write('#')
+                elif (x,y) in self.aps: #and (x,y) not in self.deadEnds:
+                    sys.stdout.write('x')
                 if (x,y) in self.deadEnds:
                     sys.stdout.write('@')
-                elif not self.walls[x][y]:
+                elif not self.walls[x][y] and not (x,y) in self.aps:
                     sys.stdout.write(' ')
             print ''
         sys.stdout.flush()
-        for x in range(1, self.width - 1):
-            for y in range(1, self.height - 1):
-                print (x,y) , ":", self.getLegalNeighbors((x, y))
+        time.sleep(500)
+        #for x in range(1, self.width - 1):
+            #for y in range(1, self.height - 1):
+                #print (x,y) , ":", self.getLegalNeighbors((x, y))
         """
+
 
     # return capsules of both sides
     def getAllCapsules(self, state):
@@ -329,21 +338,27 @@ class DumbDefensiveAgent(CaptureAgent):
         # a list of positions that have exactly one neighbor
         odCorners = []
 
+        # dynamically update the number of neighbor for this computation
+        neighborList = {}
+
         for x in range(1, self.width - 1):
             for y in range(1, self.height - 1):
                 pos = (x, y)
+                neighborList[pos] = self.getLegalNeighbors(pos)
                 if len(self.getLegalNeighbors(pos)) == 1:
                     odCorners.append(pos)
 
         for corner in odCorners:
-            neighbor = self.getLegalNeighbors(corner)
+            neighbor = neighborList[corner]
             next = corner
             positions = []
 
             isCapsuleContained = False
 
-            while len(neighbor) > 0 and len(neighbor) <= 2 and next not in positions:
+            while len(neighbor) == 1 and next not in positions:
 
+
+                #print "next", next
                 positions.append(next)
 
                 if next in self.getAllCapsules(state):
@@ -354,12 +369,46 @@ class DumbDefensiveAgent(CaptureAgent):
                     if nei not in positions:
                         next = nei
 
-                neighbor = self.getLegalNeighbors(next)
+                neighborList[next].remove(positions[-1])
+
+                neighbor = neighborList[next]
+                #print "neighbor:", neighbor
 
             # next is exit and no capsule in the dead end
-            if len(neighbor) >= 3 and not isCapsuleContained:
+            if len(neighbor) > 1 and not isCapsuleContained:
                 for pos in positions:
                     self.deadEnds[pos] = next
+
+    def getArticulationNode(self, state):
+        nodeList = []
+        for x in range(state.data.layout.width):
+          for y in range(state.data.layout.height):
+            if not state.hasWall(x, y):
+              nodeList.append((x,y))
+
+        nodeList.sort()
+        edgeList = []
+        for node in nodeList:
+          for node1 in nodeList:
+            if abs(node[0] - node1[0]) == 1 and node[1] - node1[1] ==0:
+              edgeList.append((node, node1))
+            elif node[0] - node1[0] == 0 and abs(node[1] - node1[1]) == 1:
+              edgeList.append((node, node1))
+
+        g = Graph(len(nodeList))
+        nodeDict = {}
+        for index, node in enumerate(nodeList):
+            nodeDict[node] = index
+
+        for edge in sorted(edgeList):
+        #print g.graph
+            g.addEdge(nodeDict[edge[0]], nodeDict[edge[1]])
+        a = g.AP()
+        articulationNodes = []
+        for node, index in nodeDict.iteritems():
+            if index in a:
+                articulationNodes.append(node)
+        return articulationNodes
 
     # return position of foods that were in old but not in new
     def compareFoods(self, old, new):
@@ -417,9 +466,39 @@ class DumbDefensiveAgent(CaptureAgent):
 
         return enemyPositions
 
-    # return a action moving toward or away from the target
+    # A* based on Manhattan, find a path
+    # if walkInOwnSide is True, the path wont contain nodes in enemy's side
+    def aStarSearchMove(self, start, goal, walkInOwnSide = True):
+
+        visited = []
+
+        queue = util.PriorityQueue()
+
+        queue.push((start, []), 0)
+
+        while not queue.isEmpty():
+            pos, path = queue.pop()
+
+            if pos == goal:
+                return path
+
+            if not pos in visited:
+                neighbors = self.getLegalNeighbors(pos)
+                for nei in neighbors:
+                    if not nei in visited:
+                        if not walkInOwnSide or not self.isPacmanWhenInPos(nei):
+                            newPath = path + [nei]
+                            queue.push((nei, newPath), self.getManhattanDistance(nei, goal))
+
+            visited.append(pos)
+
+        return []
+
+
+    # return a action moving toward  the target
+    # can only be called when defending
     # when there are multiple choices, randomly choose one
-    def movingRelativeToTarget(self, state, target, isCloser = True):
+    def defensiveMovingToTarget(self, state, target):
 
         if target is None:
             return None
@@ -430,25 +509,80 @@ class DumbDefensiveAgent(CaptureAgent):
 
         for action in actions:
             nextPos = self.getNextPos(state.getAgentState(self.index).getPosition(), action)
-            distance = self.quickGetDistance(target, nextPos)
-            results[action] = distance
+            # should not move to enemy's side
+            if not self.isPacmanWhenInPos(nextPos):
+                distance = self.quickGetDistance(target, nextPos)
+                results[action] = distance
 
         if len(results) <= 0:
             return None
 
-        if isCloser:
-            bestValue = min(results.itervalues())
-        else:
-            bestValue = max(results.itervalues())
+        bestValue = min(results.itervalues())
 
         bestActions = [key for key in results.keys() if results[key] == bestValue]
 
         if len(bestActions) <= 0:
             return None
 
+        # TODO predict enemy's move
         return random.choice(bestActions)
 
+    # return a action moving toward  the target
+    # called when offending
+    # when there are multiple choices, randomly choose one
+    def offensiveMovingToTarget(self, state, target):
 
+        if target is None:
+            return None
+
+        actions = state.getLegalActions(self.index)
+
+        results = {}
+
+        enemies = self.getUnscaredGhostEnemyPositions(state)
+
+        minDis = MAX_DISTANCE
+        minEnemyDis = MAX_DISTANCE
+
+        for action in actions:
+            nextPos = self.getNextPos(state.getAgentState(self.index).getPosition(), action)
+            distance = self.quickGetDistance(target, nextPos)
+            if distance < minDis:
+
+                # found better pos, drop old values
+                results.clear()
+                results[action] = distance
+                minDis = distance
+
+                closetEnemy =  self.quickFindClosetPosInList(nextPos, enemies)
+                if closetEnemy is None:
+                    minEnemyDis = MAX_DISTANCE
+                else:
+                    minEnemyDis = self.quickGetDistance(nextPos, closetEnemy)
+
+            elif distance == minDis:
+                closetEnemy = self.quickFindClosetPosInList(nextPos, enemies)
+                if closetEnemy is None:
+                    results[action] = distance
+                # the farther away from enemies, the better the pos is
+                elif self.quickGetDistance(nextPos, closetEnemy) > minEnemyDis:
+                    results.clear()
+                    results[action] = distance
+                    minDis = distance
+                    minEnemyDis = self.quickGetDistance(nextPos, closetEnemy)
+
+
+            #results[action] = distance
+
+        if len(results) <= 0:
+            return None
+
+        bestActions = [key for key in results.keys()]
+
+        if len(bestActions) <= 0:
+            return None
+
+        return random.choice(bestActions)
 
     def clearDDChasingBuff(self):
         self.isChasingDD = False
@@ -503,16 +637,14 @@ class DumbDefensiveAgent(CaptureAgent):
 
             # just chasing
             if ownState.getPosition != self.chasingDest:
-                return self.movingRelativeToTarget(state, self.chasingDest, True)
+                return self.defensiveMovingToTarget(state, self.chasingDest)
             # blocking
             else:
-                #"""
-                # just stay if its in there
+                #just stay if its in there
                 if self.chasingTarget is not None or util.flipcoin(0.7):
                     return Directions.STOP
                 # cannot know if its in there, so might just leave
                 else:
-                #"""
                     self.clearDDChasingBuff()
                     return None
 
@@ -536,8 +668,9 @@ class DumbDefensiveAgent(CaptureAgent):
         if closetEmemy is None:
             closetEmemy = self.quickFindClosetPosInList(myPos, self.lastInvadingEnemyPos)
 
+        # chase enemy
         if closetEmemy is not None:
-            return self.movingRelativeToTarget(state, closetEmemy, True)
+                return self.defensiveMovingToTarget(state, closetEmemy)
 
         # no idea where are the enemies
         else:
@@ -579,10 +712,10 @@ class DumbDefensiveAgent(CaptureAgent):
 
                 # to the pos in the mid of map
                 if posInMid is not None and self.getManhattanDistance(chosenDest, posInMid) <= SIGHT_RANGE:
-                    return self.movingRelativeToTarget(state, posInMid, True)
+                    return self.defensiveMovingToTarget(state, posInMid)
                 # or directly to that food/capsule
                 else:
-                    return self.movingRelativeToTarget(state, chosenDest, True)
+                    return self.defensiveMovingToTarget(state, chosenDest)
 
         return None
 
@@ -607,6 +740,7 @@ class DumbDefensiveAgent(CaptureAgent):
                         bestPosDis = self.quickGetDistance(pos, myPos)
                         bestPos = pos
 
+
         return (bestPos, bestPosDis)
 
     # find a probably unsafe but closest pos in intendedList
@@ -618,17 +752,72 @@ class DumbDefensiveAgent(CaptureAgent):
 
         if len(intendedList) > 0:
             for pos in intendedList:
+                minGhostToMe = self.quickFindClosetPosInList(myPos, ghostList)
                 minGhostToFood = self.quickFindClosetPosInList(pos, ghostList)
                 if (minGhostToFood is None
                 or self.quickGetDistance(pos, myPos) < self.quickGetDistance(pos, minGhostToFood)
-                or (self.quickGetDistance(myPos, minGhostToFood) > MAX_HIT_DISTANCE * 2
-                    and self.quickGetDistance(pos, minGhostToFood) > SIGHT_RANGE)):
+                or (self.quickGetDistance(myPos, minGhostToMe) > MAX_HIT_DISTANCE * 2
+                    and self.quickGetDistance(pos, minGhostToMe) > SIGHT_RANGE and minGhostToMe == minGhostToFood)):
                     if self.quickGetDistance(pos, myPos) < bestPosDis:
                         bestPosDis = self.quickGetDistance(pos, myPos)
                         bestPos = pos
 
         return (bestPos, bestPosDis)
 
+    # if nextPos is in enemy's side
+    # do not use isPacman in successor.getAgentState
+    def isPacmanWhenInPos(self, nextPos):
+        myX = nextPos[0]
+        homeX = self.homes[0][0]
+        if self.red:
+            return myX > homeX
+        else:
+            return myX < homeX
+
+    # the absolute x manhattan distance
+    def xManhattanDisToHomeFrontier(self, pos):
+        myX = pos[0]
+        homeX = self.homes[0][0]
+        return abs(myX - homeX)
+
+    # go to the target, no matter if the agent gonna die
+    def hitWhatever(self, state, target):
+
+        actions = state.getLegalActions(self.index)
+        minDisToExit = MAX_DISTANCE
+        minAction = None
+        myPos = state.getAgentState(self.index)
+
+        # just move there
+        for action in actions:
+            dis = self.quickGetDistance(target, self.getNextPos(myPos, action))
+            if dis < minDisToExit:
+                minDisToExit = dis
+                minAction = action
+
+        return minAction
+
+
+    # called in both sides ?
+    def isCloserToValuableTarget(self, oldState, lastPos, nowPos):
+
+        # compared to the foodlist of oldState
+        foodlist = self.getFood(oldState).asList()
+        capsuleList = self.getCapsules(oldState)
+
+        if len(foodlist) > 0:
+            nowMinFoodDistance = min([self.quickGetDistance(food, nowPos) for food in foodlist])
+            lastMinFoodDistance = min([self.quickGetDistance(food, lastPos) for food in foodlist])
+            if nowMinFoodDistance < lastMinFoodDistance:
+                return True
+
+        if len(capsuleList) > 0:
+            nowDis = min([self.quickGetDistance(capsule, nowPos) for capsule in capsuleList])
+            lastDis =  min([self.quickGetDistance(capsule, lastPos) for capsule in capsuleList])
+            if nowDis < lastDis:
+                return True
+
+        return False
 
     # find a shortest path to capsule or parameter foods
     def goForThem(self, state, foods):
@@ -661,11 +850,11 @@ class DumbDefensiveAgent(CaptureAgent):
 
         if bestCapsuleDis - (CAPSULE_BETTER_THAN_FOOD - 1) < bestFoodDis:
             if bestCapsule is not None:
-                return self.movingRelativeToTarget(state, bestCapsule)
+                return self.offensiveMovingToTarget(state, bestCapsule)
 
         else:
             if bestFood is not None:
-                return self.movingRelativeToTarget(state, bestFood)
+                return self.offensiveMovingToTarget(state, bestFood)
 
         return None
 
@@ -674,9 +863,18 @@ class DumbDefensiveAgent(CaptureAgent):
 
         foods = []
 
+        myPos = state.getAgentState(self.index).getPosition()
+        closetEnemy = self.quickFindClosetPosInList(myPos, self.getUnscaredGhostEnemyPositions(state))
+        minDisToEnemy = SIGHT_RANGE + 1
+
+        if closetEnemy is not None:
+            minDisToEnemy = self.quickGetDistance(myPos, closetEnemy)
+
         # relatively safe foods
         for food in self.getFood(state).asList():
             if food not in self.deadEnds:
+                foods.append(food)
+            elif self.quickGetDistance(myPos, food) * 2 + self.quickGetDistance(myPos, self.deadEnds[food]) + 1 < minDisToEnemy:
                 foods.append(food)
 
         return self.goForThem(state, foods)
@@ -688,8 +886,10 @@ class DumbDefensiveAgent(CaptureAgent):
 
         return self.goForThem(state,self.getFood(state).asList())
 
-    # return an action to go home if safe
-    def moveBackHome(self, state):
+    # return an action to go home
+    # if mightFail is False, this method will only return None if not 100% sure can safely reach home
+    # if mightFail is True, return an action that might not actually reach home when no other choices left
+    def moveBackHome(self, state, mightFail):
 
         myPos = state.getAgentState(self.index).getPosition()
 
@@ -706,7 +906,19 @@ class DumbDefensiveAgent(CaptureAgent):
 
         if len(safeHouses) > 0:
             dest = self.quickFindClosetPosInList(myPos, safeHouses)
-            return self.movingRelativeToTarget(state, dest)
+            return self.offensiveMovingToTarget(state, dest)
+
+        # might not succeesful come home if going this way
+        if mightFail:
+            for home in self.homes:
+                closetToHomeEnemy = self.quickFindClosetPosInList(home, visibleGhosts)
+                disToEnemy = self.quickGetDistance(myPos, closetToHomeEnemy)
+                if disToEnemy > self.quickGetDistance(home, myPos):
+                    safeHouses.append(home)
+
+            if len(safeHouses) > 0:
+                dest = self.quickFindClosetPosInList(myPos, safeHouses)
+                return self.offensiveMovingToTarget(state, dest)
 
         return None
 
@@ -725,14 +937,14 @@ class DumbDefensiveAgent(CaptureAgent):
 
         # no enemy around here
         if len(ghosts) <= 0:
-            return randomMove(state)
+            return self.randomMove(state)
 
         myPos = state.getAgentState(self.index).getPosition()
 
         for action in state.getLegalActions(self.index):
             nextPos = self.getNextPos(myPos, action)
             closetEmemy = self.quickFindClosetPosInList(nextPos, ghosts)
-            if self.quickGetDistance(nextPos, closetEmemy) >= MAX_HIT_DISTANCE:
+            if self.quickGetDistance(nextPos, closetEmemy) >= MAX_HIT_DISTANCE or not self.isPacmanWhenInPos(nextPos):
                 actions.append(action)
 
         if len(actions) > 0:
@@ -768,14 +980,14 @@ class DumbDefensiveAgent(CaptureAgent):
             self.clearDDChasingBuff()
             action = self.offend(state)
             if action is None and ownState.numCarrying > 0:
-                action  = self.moveBackHome(state)
+                action  = self.moveBackHome(state, True)
                 if action is None and ownState.getPosition() not in self.deadEnds:
                     action = self.safeRandomMove(state)
 
         # no longer scared, but still on enemy's side
         elif ownState.isPacman:
             self.clearDDChasingBuff()
-            action  = self.moveBackHome(state)
+            action  = self.moveBackHome(state, True)
             if action is None and ownState.getPosition() not in self.deadEnds:
                 action = self.safeRandomMove(state)
 
@@ -786,8 +998,6 @@ class DumbDefensiveAgent(CaptureAgent):
 
         if action is None:
             action = self.randomMove(state)
-
-        self.updateMyStatus(state)
 
         return action
 
@@ -805,24 +1015,22 @@ class DumbDefensiveAgent(CaptureAgent):
 
         # check the distance between home and nearest food and time left
         if ownState.numCarrying > 0 and MAX_STEP - self.step < 2.5 * minDisToHome and winIfComeBack:
-            action = self.moveBackHome(state)
+            action = self.moveBackHome(state, True)
 
         if action is None:
             action = self.offend(state)
 
         if action is None and ownState.numCarrying > MAX_UNSAFE_FOOD_CARRYING and winIfComeBack:
-            action  = self.moveBackHome(state)
+            action  = self.moveBackHome(state, False)
 
         if action is None:
             action = self.offendAtRisk(state)
 
-        if action is None:
-            if util.flipCoin(INSANE_PROBABILITY):
-                action = self.randomMove(state)
-            else:
-                action = self.safeRandomMove(state)
+        if action is None and ownState.numCarrying > 0:
+            action  = self.moveBackHome(state, True)
 
-        self.updateMyStatus(state)
+        if action is None:
+                action = self.safeRandomMove(state)
 
         return action
 
@@ -837,15 +1045,23 @@ class DumbDefensiveAgent(CaptureAgent):
 
         score = self.getScore(state)
 
+        action = None
+
         # lost too much food, no longer should defend
         if score <= (-1) * numMyFoodLeft * SCORE_RATIO:
-            return self.offensiveAction(state)
+            action = self.offensiveAction(state)
 
+        if action is None:
         # last moment!
-        if MAX_STEP - self.step <= 10 * (abs(score) - self.numFoodMyTeamCarrying(state)) + minDisToHome and score < 0:
-            return self.offensiveAction(state)
+            if MAX_STEP - self.step <= 15 * (abs(score) - self.numFoodMyTeamCarrying(state)) + minDisToHome and score < 0:
+                action = self.offensiveAction(state)
 
-        return self.defensiveAction(state)
+        if action is None:
+            action = self.defensiveAction(state)
+
+        self.updateMyStatus(state)
+
+        return action
 
 # the max food carrying recorded in feature,  i.e. any > 8 is regarded as 8
 MAX_FOOD_CARRYING = 8
@@ -858,9 +1074,9 @@ MAX_DEATH_END_DEPTH = 4
 
 
 # Q-Learning parameter
-ALPHA = 0.2
+ALPHA = 0.2 #---------------------------- for contest!!
 GAMMA = 0.85
-EPISILON = 0.01  # for contest
+EPSILON = 0.005  # for contest
 QTABLE = "offense.json"
 
 BRING_FOOD_REWARD_BASE = 10
@@ -885,50 +1101,13 @@ WALKING_IN_HOME_BACKWARD_REWARD = -3
 
 class QOffensiveAgent(QAgent, DumbDefensiveAgent):
 
-    def __init__(self, index, alpha = ALPHA, gamma = GAMMA, epsilon = EPISILON, path = QTABLE):
+    def __init__(self, index, alpha = ALPHA, gamma = GAMMA, epsilon = EPSILON, path = QTABLE):
 
         CaptureAgent.__init__(self, index)
         QAgent.__init__(self, index, alpha, gamma, epsilon, path)
 
         self.isQOffesnvie = True
 
-
-    # if this agent is pacman in next position
-    # do not use isPacman in successor.getAgentState
-    def isPacmanInNext(self, nextPos):
-        myX = nextPos[0]
-        homeX = self.homes[0][0]
-        if self.red:
-            return myX > homeX
-        else:
-            return myX < homeX
-
-    # the absolute x manhattan distance
-    def xManhattanDisToHomeFrontier(self, pos):
-        myX = pos[0]
-        homeX = self.homes[0][0]
-        return abs(myX - homeX)
-
-    # called in both sides ?
-    def isCloserToValuableTarget(self, oldState, lastPos, nowPos):
-
-        # compared to the foodlist of oldState
-        foodlist = self.getFood(oldState).asList()
-        capsuleList = self.getCapsules(oldState)
-
-        if len(foodlist) > 0:
-            nowMinFoodDistance = min([self.quickGetDistance(food, nowPos) for food in foodlist])
-            lastMinFoodDistance = min([self.quickGetDistance(food, lastPos) for food in foodlist])
-            if nowMinFoodDistance < lastMinFoodDistance:
-                return True
-
-        if len(capsuleList) > 0:
-            nowDis = min([self.quickGetDistance(capsule, nowPos) for capsule in capsuleList])
-            lastDis =  min([self.quickGetDistance(capsule, lastPos) for capsule in capsuleList])
-            if nowDis < lastDis:
-                return True
-
-        return False
 
     # find best target
     def findTarget(self, state, myPos, ghostList):
@@ -977,15 +1156,17 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
         return None
 
     # stuck in loop
+    # should only be called by the offensive agent!
     def loopBreaker(self, state):
 
         isInLoop = False
-        seqLen = 6
+        seqLen = 7
         numPos = 2
         lastset = set([])
         myPos = state.getAgentState(self.index).getPosition()
+        enemies = self.getUnscaredGhostEnemyPositions(state)
 
-        while len(self.lastPosSeq) > seqLen and not isInLoop and seqLen <= 18:
+        while len(self.lastPosSeq) > seqLen and not isInLoop and seqLen <= 25:
             lastSet = set(self.lastPosSeq[-seqLen:])
             if len(lastSet) <= numPos and myPos in lastSet:
                 isInLoop = True
@@ -998,14 +1179,41 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
 
         #in loop
 
-        # in dead ends
-        if (myPos) in self.deadEnds:
+        # in dead ends in enemy's side
+        if myPos in self.deadEnds and state.getAgentState(self.index).isPacman:
             # exit
-            action = self.movingRelativeToTarget(state, self.deadEnds[myPos], True)
-            if action is not None:
-                return action
+            # self.hitWhatever(state, self.deadEnds[myPos])
+            self.movingSequence = self.aStarSearchMove(myPos, self.deadEnds[myPos], False)
+            return None
 
-        # stuck in somewhere
+        # stuck in own side:
+        if not state.getAgentState(self.index).isPacman:
+            target = myPos
+
+            # stuck in own side, but cannot find the enemy (it might because the agent happens to run away from the blocking enemy)
+            if len(enemies) <= 0:
+                # choose a target at the homeEdge which is farthest
+                for home in self.homes:
+                    if self.getManhattanDistance(home, myPos) > self.getManhattanDistance(target, myPos):
+                        target = home
+            # find a new pos that is farthest away from the enemy (Manhattan is good enough)
+            else:
+                minDis = MAX_DISTANCE
+                for home in self.homes:
+                    closetEnemy = self.quickFindClosetPosInList(home, enemies)
+                    disToClsoetEnemy = self.quickGetDistance(home, closetEnemy)
+                    realDisToMe = len(self.aStarSearchMove(myPos, home, True))
+                    # close a pos that is close to mypos but far from enemy
+                    if realDisToMe < minDis and disToClsoetEnemy > SIGHT_RANGE + 1:
+                        minDis = realDisToMe
+                        target = home
+
+            # set moving sequence and let sequence handler handle this
+            if target != myPos:
+                self.movingSequence = self.aStarSearchMove(myPos, target, True)
+                return None
+
+        # stuck in somewhere else
         ghosts = self.getUnscaredGhostEnemyPositions(state)
 
         togos = []
@@ -1013,15 +1221,39 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
             if nei not in ghosts and nei not in lastSet:
                 togos.append(nei)
 
-        # there is safe place to go
+        # there is a safe place to go
         if len(togos) > 0:
             target = random.choice(togos)
-            action = self.movingRelativeToTarget(state, target, True)
+            action = self.offensiveMovingToTarget(state, target)
             if action is not None:
                 return action
 
-        return self.randomMove(state)
+        #TODO AP BLOCK DETECTION:
 
+        return self.safeRandomMove(state)
+
+
+    # a special sequence handler for the offensive agent
+    def sequenceHandler(self, state):
+
+        myPos = state.getAgentState(self.index).getPosition()
+
+        if len(self.movingSequence) <= 0:
+            return None
+
+        actions = state.getLegalActions(self.index)
+
+        for action in actions:
+            nextPos = self.getNextPos(myPos, action)
+            # find the correct next pos
+            if nextPos == self.movingSequence[0]:
+                self.movingSequence.pop(0)
+                return action
+
+        # current position does not match the sequence, might be caused by get eaten as a scared ghost
+        # just clear the sequence
+        self.movingSequence = []
+        return None
 
     def getFeatures(self, state, action):
 
@@ -1061,7 +1293,7 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
 
         # do not use getSuccessor to check if this agent is pacman
         # because getSuccessor might set your next pos to startPos !!
-        isPacman = int(self.isPacmanInNext(nextPos))
+        isPacman = int(self.isPacmanWhenInPos(nextPos))
 
         nowDisToHomeFrontier = self.quickGetDistance(myPos, self.quickFindClosetPosInList(myPos, self.homes))
         nextDisToHomeFrontier = self.quickGetDistance(nextPos, self.quickFindClosetPosInList(nextPos, self.homes))
@@ -1205,9 +1437,22 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
 
     def chooseAction(self, state):
 
-        loopBreaker = self.loopBreaker(state)
+        feature = None
+        action = None
+
+        # check special sequence
+        action = self.sequenceHandler(state)
+
+        loopBreaker = None
+
+        if action is None:
+            loopBreaker = self.loopBreaker(state)
+            # check again as loopBreaker may update this
+            action = self.sequenceHandler(state)
 
         lastState = self.getPreviousObservation()
+
+        self.isQOffesnvie = False
 
         if self.isQOffesnvie and self.getScore(state) < 0 and self.step >= (MAX_STEP / 2):
             self.isQOffesnvie = False
@@ -1223,15 +1468,14 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
                 reward = self.determineReward(lastState, self.lastAction, state)
                 self.update(tmpFeature, state, reward)
 
-        feature = None
-        action = None
-
-        if loopBreaker is None:
+        # not using loopBreaker or sequenceHandler
+        if loopBreaker is None and action is None:
             if self.isQOffesnvie:
                 feature, action = self.determineAction(state)
             else:
                 action = self.offensiveAction(state)
-        else:
+        # not using sequenceHandler, must be loopBreaker
+        elif action is None:
             action = loopBreaker
 
         # this only update status of the dumb agent class
@@ -1240,4 +1484,105 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
         self.lastAction = action
         self.lastFeature = feature
 
+        ###############################
+        mmm = state.getAgentState(self.index).getPosition()
+        nnn = self.getNextPos(mmm, action)
+
+        wori = self.quickFindClosetPosInList(nnn, self.getUnscaredGhostEnemyPositions(state))
+
+        if (wori is not None and self.quickGetDistance(wori, nnn) <= 1 and self.isPacmanWhenInPos(nnn)
+            and mmm not in self.deadEnds and loopBreaker is None) :
+            print "BUG"
+            print "now at:", mmm, "moving to", nnn
+            time.sleep(50)
+
         return action
+
+from collections import defaultdict
+
+#This class represents an undirected graph
+#using adjacency list representation
+class Graph:
+
+    def __init__(self,vertices):
+        self.V= vertices #No. of vertices
+        self.graph = defaultdict(list) # default dictionary to store graph
+        self.Time = 0
+
+    # function to add an edge to graph
+    def addEdge(self,u,v):
+        self.graph[u].append(v)
+        #self.graph[v].append(u)
+
+    '''A recursive function that find articulation points
+    using DFS traversal
+    u --> The vertex to be visited next
+    visited[] --> keeps tract of visited vertices
+    disc[] --> Stores discovery times of visited vertices
+    parent[] --> Stores parent vertices in DFS tree
+    ap[] --> Store articulation points'''
+    def APUtil(self,u, visited, ap, parent, low, disc):
+
+        #Count of children in current node
+        children =0
+
+        # Mark the current node as visited and print it
+        visited[u]= True
+
+        # Initialize discovery time and low value
+        disc[u] = self.Time
+        low[u] = self.Time
+        self.Time += 1
+
+        #Recur for all the vertices adjacent to this vertex
+        for v in self.graph[u]:
+            # If v is not visited yet, then make it a child of u
+            # in DFS tree and recur for it
+            if visited[v] == False :
+                parent[v] = u
+                children += 1
+                self.APUtil(v, visited, ap, parent, low, disc)
+
+                # Check if the subtree rooted with v has a connection to
+                # one of the ancestors of u
+                low[u] = min(low[u], low[v])
+
+                # u is an articulation point in following cases
+                # (1) u is root of DFS tree and has two or more chilren.
+                if parent[u] == -1 and children > 1:
+                    ap[u] = True
+
+                #(2) If u is not root and low value of one of its child is more
+                # than discovery value of u.
+                if parent[u] != -1 and low[v] >= disc[u]:
+                    ap[u] = True
+
+                # Update low value of u for parent function calls
+            elif v != parent[u]:
+                low[u] = min(low[u], disc[v])
+
+
+    #The function to do DFS traversal. It uses recursive APUtil()
+    def AP(self):
+
+        # Mark all the vertices as not visited
+        # and Initialize parent and visited,
+        # and ap(articulation point) arrays
+        visited = [False] * (self.V)
+        disc = [float("Inf")] * (self.V)
+        low = [float("Inf")] * (self.V)
+        parent = [-1] * (self.V)
+        ap = [False] * (self.V) #To store articulation points
+
+        # Call the recursive helper function
+        # to find articulation points
+        # in DFS tree rooted with vertex 'i'
+        for i in range(self.V):
+            if visited[i] == False:
+                self.APUtil(i, visited, ap, parent, low, disc)
+        indexList = []
+        for index, value in enumerate (ap):
+            if value == True:
+                indexList.append(index)
+
+        return indexList
