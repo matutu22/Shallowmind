@@ -185,6 +185,9 @@ INSANE_PROBABILITY = 0
 # CHANGE STATE WHEN SCORE >= RestFood * SCORE_RATIO
 SCORE_RATIO = 1.5
 
+# be extremely aggressive if self.powerTimer >= SAFE_POWER_TIME
+SAFE_POWER_TIME = 20
+
 
 # a Dumb Quirky Naive defensive agent
 class DumbDefensiveAgent(CaptureAgent):
@@ -200,6 +203,7 @@ class DumbDefensiveAgent(CaptureAgent):
         self.startPos = state.getAgentState(self.index).getPosition()
         self.enemyStartPos = [state.getAgentState(i).getPosition() for i in self.getOpponents(state)][0]
         self.step = 0
+        self.powerTimer = 0
 
         self.cachedDistance = {}
 
@@ -215,6 +219,7 @@ class DumbDefensiveAgent(CaptureAgent):
         self.lastMyFoods = self.getFoodYouAreDefending(state)
         self.lastInvadingEnemyPos = []
         self.lastAllCapules = self.getAllCapsules(state)
+        self.lastTheirCapsules = self.getCapsules(state)
         self.lastPosSeq = []
 
         self.computeDeadEnds(state)
@@ -786,7 +791,7 @@ class DumbDefensiveAgent(CaptureAgent):
         actions = state.getLegalActions(self.index)
         minDisToExit = MAX_DISTANCE
         minAction = None
-        myPos = state.getAgentState(self.index)
+        myPos = state.getAgentState(self.index).getPosition()
 
         # just move there
         for action in actions:
@@ -848,8 +853,9 @@ class DumbDefensiveAgent(CaptureAgent):
                         bestCapsuleDis = self.quickGetDistance(capsule, myPos)
                         bestCapsule = capsule
 
+        # prefer capsule if neccessary
         if bestCapsuleDis - (CAPSULE_BETTER_THAN_FOOD - 1) < bestFoodDis:
-            if bestCapsule is not None:
+            if bestCapsule is not None and self.powerTimer <= bestCapsuleDis + MAX_HIT_DISTANCE:
                 return self.offensiveMovingToTarget(state, bestCapsule)
 
         else:
@@ -867,15 +873,22 @@ class DumbDefensiveAgent(CaptureAgent):
         closetEnemy = self.quickFindClosetPosInList(myPos, self.getUnscaredGhostEnemyPositions(state))
         minDisToEnemy = SIGHT_RANGE + 1
 
-        if closetEnemy is not None:
-            minDisToEnemy = self.quickGetDistance(myPos, closetEnemy)
+        if self.powerTimer > SAFE_POWER_TIME and closetEnemy is None:
+            return self.goForThem(state, self.getFood(state).asList())
+
+
 
         # relatively safe foods
         for food in self.getFood(state).asList():
             if food not in self.deadEnds:
                 foods.append(food)
-            elif self.quickGetDistance(myPos, food) * 2 + self.quickGetDistance(myPos, self.deadEnds[food]) + 1 < minDisToEnemy:
-                foods.append(food)
+            else:
+                # enemy's distance between
+                if closetEnemy is not None:
+                    minDisToEnemy = self.quickGetDistance(self.deadEnds[food], closetEnemy)
+                if (self.quickGetDistance(myPos, food) * 2 + self.quickGetDistance(myPos, self.deadEnds[food]) + 1 < minDisToEnemy
+                    and self.quickGetDistance(food, self.deadEnds[food]) <= SIGHT_RANGE):
+                    foods.append(food)
 
         return self.goForThem(state, foods)
 
@@ -957,39 +970,37 @@ class DumbDefensiveAgent(CaptureAgent):
         # capsule changed, recompute all the dead ends
         if len(self.getAllCapsules(state)) < len(self.lastAllCapules):
             self.computeDeadEnds(state)
+            # eaten their capsule
+            if len(self.getCapsules(state)) < len(self.lastTheirCapsules):
+                self.powerTimer = 40
 
         # update last Status
         self.lastMyFoods = self.getFoodYouAreDefending(state)
         self.lastInvadingEnemyPos = self.getInvadingEnemyPositions(state)
         self.lastAllCapules = self.getAllCapsules(state)
+        self.lastTheirCapsules = self.getCapsules(state)
         self.lastPosSeq.append(state.getAgentState(self.index).getPosition())
         self.step += 1
+        if self.powerTimer > 0:
+            self.powerTimer -= 1
 
     # for each step, only one of defensiveAction and offensiveAction should be called
+    # when this method is called, make sure that scaredTimer <= 0
     def defensiveAction(self, state):
 
         ownState = state.getAgentState(self.index)
 
-        scaredTimer = ownState.scaredTimer
-
         action = None
 
-        # temporarily become slightly offensive if scared
-        # do not call offensiveAction!
-        if scaredTimer > 0:
-            self.clearDDChasingBuff()
-            action = self.offend(state)
-            if action is None and ownState.numCarrying > 0:
-                action  = self.moveBackHome(state, True)
-                if action is None and ownState.getPosition() not in self.deadEnds:
-                    action = self.safeRandomMove(state)
-
         # no longer scared, but still on enemy's side
-        elif ownState.isPacman:
+        if ownState.isPacman:
             self.clearDDChasingBuff()
             action  = self.moveBackHome(state, True)
             if action is None and ownState.getPosition() not in self.deadEnds:
                 action = self.safeRandomMove(state)
+            # get blocked
+            elif action is None:
+                self.hitWhatever(state, self.deadEnds[ownState.getPosition()])
 
         else:
             action = self.chaseDeadEnd(state)
@@ -1017,10 +1028,19 @@ class DumbDefensiveAgent(CaptureAgent):
         if ownState.numCarrying > 0 and MAX_STEP - self.step < 2.5 * minDisToHome and winIfComeBack:
             action = self.moveBackHome(state, True)
 
+        # only 2 dots left
+        if action is None and len(self.getFood(state).asList()) <= 2 and ownState.numCarrying > 0:
+            action = self.moveBackHome(state, True)
+
         if action is None:
             action = self.offend(state)
 
+        # go home if not too hard
         if action is None and ownState.numCarrying > MAX_UNSAFE_FOOD_CARRYING and winIfComeBack:
+            action  = self.moveBackHome(state, False)
+
+        # go home if not too hard
+        if action is None and ownState.numCarrying > 0 and self.getScore(state) <= 0 and winIfComeBack:
             action  = self.moveBackHome(state, False)
 
         if action is None:
@@ -1047,13 +1067,36 @@ class DumbDefensiveAgent(CaptureAgent):
 
         action = None
 
+        scaredTimer = ownState.scaredTimer
+
+        # temporarily become offensive if scared
+        if scaredTimer > 0:
+            self.clearDDChasingBuff()
+
+            #go home as the timer gets closer to 0
+            if scaredTimer <= minDisToHome and ownState.isPacman:
+                action  = self.moveBackHome(state, True)
+
+            # no need to go home, or failed to find a safe way
+            if action is None:
+                action = self.offensiveAction(state)
+
+            # no way, but not in dead ends neither
+            if action is None and ownState.getPosition() not in self.deadEnds:
+                action = self.safeRandomMove(state)
+            # blocked
+            elif action is None:
+                action = self.hitWhatever(state, self.deadEnds[ownState.getPosition()])
+
         # lost too much food, no longer should defend
         if score <= (-1) * numMyFoodLeft * SCORE_RATIO:
+            self.clearDDChasingBuff()
             action = self.offensiveAction(state)
 
         if action is None:
         # last moment!
             if MAX_STEP - self.step <= 15 * (abs(score) - self.numFoodMyTeamCarrying(state)) + minDisToHome and score < 0:
+                self.clearDDChasingBuff()
                 action = self.offensiveAction(state)
 
         if action is None:
@@ -1452,10 +1495,11 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
 
         lastState = self.getPreviousObservation()
 
-        self.isQOffesnvie = False
+        """
+        #self.isQOffesnvie = False
 
-        if self.isQOffesnvie and self.getScore(state) < 0 and self.step >= (MAX_STEP / 2):
-            self.isQOffesnvie = False
+        #if self.isQOffesnvie and self.getScore(state) < 0 and self.step >= (MAX_STEP / 2):
+            #self.isQOffesnvie = False
 
         # update Q, no matter if this round is using loopBreaker
         # but if used loopBreaker last time, lastFeature will be None, thus need to be recomputed
@@ -1467,15 +1511,16 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
                 tmpFeature = self.getFeatures(lastState, self.lastAction)
                 reward = self.determineReward(lastState, self.lastAction, state)
                 self.update(tmpFeature, state, reward)
+        """
 
         # not using loopBreaker or sequenceHandler
         if loopBreaker is None and action is None:
-            if self.isQOffesnvie:
-                feature, action = self.determineAction(state)
-            else:
+            #if self.isQOffesnvie:
+                #feature, action = self.determineAction(state)
+            #else:
                 action = self.offensiveAction(state)
         # not using sequenceHandler, must be loopBreaker
-        elif action is None:
+        elif loopBreaker is not None:
             action = loopBreaker
 
         # this only update status of the dumb agent class
@@ -1484,6 +1529,7 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
         self.lastAction = action
         self.lastFeature = feature
 
+        """
         ###############################
         mmm = state.getAgentState(self.index).getPosition()
         nnn = self.getNextPos(mmm, action)
@@ -1495,6 +1541,10 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
             print "BUG"
             print "now at:", mmm, "moving to", nnn
             time.sleep(50)
+        """
+
+        if action is None:
+            feature, action = self.determineAction(state)
 
         return action
 
