@@ -71,7 +71,10 @@ class QAgent():
         self.lastAction = None
         self.lastFeature = None
 
-        self.loadQ()
+        self.q = util.Counter()
+
+        # currently Q is no better than hc
+        #self.loadQ()
 
         # using load here when tranning
         # it is linear Agent when having loadW
@@ -210,6 +213,7 @@ class DumbDefensiveAgent(CaptureAgent):
         self.isChasingDD = False
         self.chasingTarget = None
         self.chasingDest = None
+        self.GoHomeGO = False
 
         # only used for offensive agent
         self.movingSequence = []
@@ -983,6 +987,9 @@ class DumbDefensiveAgent(CaptureAgent):
         self.step += 1
         if self.powerTimer > 0:
             self.powerTimer -= 1
+        # at home, update GoHomeGO
+        if not self.isPacmanWhenInPos(state.getAgentState(self.index).getPosition()):
+            self.GoHomeGO = False
 
     # for each step, only one of defensiveAction and offensiveAction should be called
     # when this method is called, make sure that scaredTimer <= 0
@@ -1026,10 +1033,14 @@ class DumbDefensiveAgent(CaptureAgent):
 
         # check the distance between home and nearest food and time left
         if ownState.numCarrying > 0 and MAX_STEP - self.step < 2.5 * minDisToHome and winIfComeBack:
-            action = self.moveBackHome(state, True)
+            self.GoHomeGO = True
 
         # only 2 dots left
-        if action is None and len(self.getFood(state).asList()) <= 2 and ownState.numCarrying > 0:
+        if len(self.getFood(state).asList()) <= 2 and ownState.numCarrying > 0:
+            self.GoHomeGO = True
+
+        # strongly need to go home
+        if self.GoHomeGO:
             action = self.moveBackHome(state, True)
 
         if action is None:
@@ -1496,10 +1507,6 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
         lastState = self.getPreviousObservation()
 
         """
-        #self.isQOffesnvie = False
-
-        #if self.isQOffesnvie and self.getScore(state) < 0 and self.step >= (MAX_STEP / 2):
-            #self.isQOffesnvie = False
 
         # update Q, no matter if this round is using loopBreaker
         # but if used loopBreaker last time, lastFeature will be None, thus need to be recomputed
@@ -1528,20 +1535,6 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
 
         self.lastAction = action
         self.lastFeature = feature
-
-        """
-        ###############################
-        mmm = state.getAgentState(self.index).getPosition()
-        nnn = self.getNextPos(mmm, action)
-
-        wori = self.quickFindClosetPosInList(nnn, self.getUnscaredGhostEnemyPositions(state))
-
-        if (wori is not None and self.quickGetDistance(wori, nnn) <= 1 and self.isPacmanWhenInPos(nnn)
-            and mmm not in self.deadEnds and loopBreaker is None) :
-            print "BUG"
-            print "now at:", mmm, "moving to", nnn
-            time.sleep(50)
-        """
 
         if action is None:
             feature, action = self.determineAction(state)
