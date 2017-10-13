@@ -18,6 +18,7 @@ from game import Directions, Actions
 import game
 import json
 import ast
+import copy
 from collections import defaultdict
 
 #################
@@ -213,6 +214,11 @@ class DumbDefensiveAgent(CaptureAgent):
         self.isChasingDD = False
         self.chasingTarget = None
         self.chasingDest = None
+
+        self.isChasingAP = False
+        self.chasingAPTarget = None
+        self.chasingAPDest = None
+
         self.GoHomeGO = False
 
         # only used for offensive agent
@@ -226,8 +232,28 @@ class DumbDefensiveAgent(CaptureAgent):
         self.lastTheirCapsules = self.getCapsules(state)
         self.lastPosSeq = []
 
+        # compute dead ends and ap ends
         self.computeDeadEnds(state)
-        self.aps = [realAP for realAP in self.getArticulationNode(state) if realAP not in self.deadEnds]
+        self.computePhysicalDeadEnds(state)
+        self.apDict = self.getArticulationNode(state)
+
+        self.computeCapsulesInAP(state)
+
+        self.apEnds = {}
+
+        #print self.apDict
+        #print "---------------"
+
+        for k,v in self.apDict.iteritems():
+            if len(v) > 0:
+                for pos in v:
+                    if pos in self.apEnds:
+                        self.apEnds[pos].append(k)
+                    else:
+                        self.apEnds[pos] = [k]
+
+        #print self.apEnds
+
 
         # IMPORTANT!!!! ESPECIALLY FOR SUBCLASS QOffensiveAgent
         random.seed(time.time())
@@ -235,19 +261,18 @@ class DumbDefensiveAgent(CaptureAgent):
         """
         import sys
         #print the map
-        #for y in reversed(range(self.height)):
-            #for x in range(self.width):
+        for y in reversed(range(self.height)):
+            for x in range(self.width):
                 if self.walls[x][y]:
                     sys.stdout.write('#')
-                elif (x,y) in self.aps: #and (x,y) not in self.deadEnds:
-                    sys.stdout.write('x')
-                if (x,y) in self.deadEnds:
-                    sys.stdout.write('@')
-                elif not self.walls[x][y] and not (x,y) in self.aps:
+                #elif (x,y) in self.physicalDeadEnds:
+                    #sys.stdout.write('@')
+                elif (x,y) in self.apDict:
+                    sys.stdout.write(str(self.numCapsuleInAP[(x,y)]))
+                elif not self.walls[x][y]:
                     sys.stdout.write(' ')
             print ''
         sys.stdout.flush()
-        time.sleep(500)
         #for x in range(1, self.width - 1):
             #for y in range(1, self.height - 1):
                 #print (x,y) , ":", self.getLegalNeighbors((x, y))
@@ -257,6 +282,14 @@ class DumbDefensiveAgent(CaptureAgent):
     # return capsules of both sides
     def getAllCapsules(self, state):
         return self.getCapsulesYouAreDefending(state) + self.getCapsules(state)
+
+    def getTeammateIndex(self, state):
+
+        indices = self.getTeam(state)
+
+        for index in indices:
+            if index != self.index:
+                return index
 
     def getHomeInMid(self):
 
@@ -366,7 +399,6 @@ class DumbDefensiveAgent(CaptureAgent):
 
             while len(neighbor) == 1 and next not in positions:
 
-
                 #print "next", next
                 positions.append(next)
 
@@ -388,10 +420,75 @@ class DumbDefensiveAgent(CaptureAgent):
                 for pos in positions:
                     self.deadEnds[pos] = next
 
+    # compute physical dead ends ( without considering capsules)
+    def computePhysicalDeadEnds(self, state):
+
+        # key : a pos that is in a dead end
+        # value : the exit of the dead end
+        self.physicalDeadEnds = {}
+
+        # a list of positions that have exactly one neighbor
+        odCorners = []
+
+        # dynamically update the number of neighbor for this computation
+        neighborList = {}
+
+        for x in range(1, self.width - 1):
+            for y in range(1, self.height - 1):
+                pos = (x, y)
+                neighborList[pos] = self.getLegalNeighbors(pos)
+                if len(self.getLegalNeighbors(pos)) == 1:
+                    odCorners.append(pos)
+
+        for corner in odCorners:
+            neighbor = neighborList[corner]
+            next = corner
+            positions = []
+
+            while len(neighbor) == 1 and next not in positions:
+
+                #print "next", next
+                positions.append(next)
+
+                for nei in neighbor:
+                    if nei not in positions:
+                        next = nei
+
+                neighborList[next].remove(positions[-1])
+
+                neighbor = neighborList[next]
+                #print "neighbor:", neighbor
+
+            # next is exit and no capsule in the dead end
+            if len(neighbor) > 1:
+                for pos in positions:
+                    self.physicalDeadEnds[pos] = next
+
+    # update the number of capsules for every ap
+    def computeCapsulesInAP(self, state):
+        self.numCapsuleInAP = {}
+
+        allCapsules = self.getAllCapsules(state)
+
+        for k, v in self.apDict.iteritems():
+            self.numCapsuleInAP[k] = 0
+            if len(allCapsules) > 0:
+                for capsule in allCapsules:
+                    if capsule in v:
+                        self.numCapsuleInAP[k] += 1
+                    elif capsule == k:
+                        self.numCapsuleInAP[k] += 1
+
     def getArticulationNode(self, state):
+
+        # Get Dead end nodes
+        deadEndNodes = []
+        for node in self.physicalDeadEnds:
+            deadEndNodes.append(node)
+
         nodeList = []
-        for x in range(state.data.layout.width):
-          for y in range(state.data.layout.height):
+        for x in range(self.width):
+          for y in range(self.height):
             if not state.hasWall(x, y):
               nodeList.append((x,y))
 
@@ -404,6 +501,7 @@ class DumbDefensiveAgent(CaptureAgent):
             elif node[0] - node1[0] == 0 and abs(node[1] - node1[1]) == 1:
               edgeList.append((node, node1))
 
+
         g = Graph(len(nodeList))
         nodeDict = {}
         for index, node in enumerate(nodeList):
@@ -412,12 +510,58 @@ class DumbDefensiveAgent(CaptureAgent):
         for edge in sorted(edgeList):
         #print g.graph
             g.addEdge(nodeDict[edge[0]], nodeDict[edge[1]])
+
         a = g.AP()
         articulationNodes = []
         for node, index in nodeDict.iteritems():
             if index in a:
                 articulationNodes.append(node)
-        return articulationNodes
+
+        #Remove deadend from ap
+        # print articulationNodes
+        for node in deadEndNodes:
+            if node in articulationNodes:
+                articulationNodes.remove(node)
+        #print sorted(articulationNodes)
+    ####################################################################
+    ############# Select one from three
+
+        midNode = None
+        for x in range(1,self.height - 1):
+            if not state.hasWall(self.width / 2 - 1,x):
+                midNode = (self.width / 2 - 1, x)
+                break
+
+        list1 = copy.deepcopy(articulationNodes)
+        list2 = copy.deepcopy(articulationNodes)
+
+        for node in list1:
+            for node1 in list2:
+                if (abs(node[0] - node1[0]) == 1 and node[1] - node1[1] ==0) or (node[0] - node1[0] == 0 and abs(node[1] - node1[1]) == 1):
+                    if self.quickGetDistance(node, midNode) > self.quickGetDistance(node1, midNode):
+                        if node in articulationNodes:
+                            articulationNodes.remove(node)
+                    else:
+                        if node1 in articulationNodes:
+                            articulationNodes.remove(node1)
+        ##################################
+        # Until here, filtered articulation nodes
+        ##################
+        #     Inside Node dict
+        ##################
+        insideDic = {}
+        # Create a graph for bfs
+        g2 = Graph(len(nodeList))
+        for edge in edgeList:
+            g2.addEdge(edge[0], edge[1])
+        graph = g2.graph
+        for node in articulationNodes:
+            insideList = computeMaxDepth(node, graph)
+            insideDic[node] = insideList
+
+        #for k,v in insideDic.iteritems():
+            #print k,":",v
+        return insideDic
 
     # return position of foods that were in old but not in new
     def compareFoods(self, old, new):
@@ -430,6 +574,32 @@ class DumbDefensiveAgent(CaptureAgent):
                     foodList.append((x, y))
 
         return foodList
+
+    # if all the capsules and >= 3/5 food are in the ap, go defend there
+    def findBlockingPoint(self, state):
+
+        myFoods = self.getFoodYouAreDefending(state).asList()
+
+        ans = None
+
+        numMyCapsules = len(self.getCapsulesYouAreDefending(state))
+
+        apFoods = util.Counter()
+
+        if len(myFoods) > 0:
+            for food in myFoods:
+                if food in self.apEnds and len(self.apEnds[food]) > 0:
+                    for ap in self.apEnds[food]:
+                        # only if all the capsules are in the AP
+                        if self.numCapsuleInAP[ap] == numMyCapsules:
+                            apFoods[ap] += 1
+
+            if len(apFoods) > 0:
+                numFoodInBestAP = apFoods[apFoods.argMax()]
+                if numFoodInBestAP >= len(myFoods) * 3 / 5:
+                    return apFoods.argMax()
+
+        return None
 
     # return enemy's index at certain position, none if failed
     def getEnemyIndexBasedOnPos(self, state, position):
@@ -598,6 +768,11 @@ class DumbDefensiveAgent(CaptureAgent):
         self.chasingTarget = None
         self.chasingDest = None
 
+    def clearAPChasingBuff(self):
+        self.isChasingAP = False
+        self.chasingAPTarget = None
+        self.chasingAPDest = None
+
     # a special defensive move
     # at most one agent should do this
     def chaseDeadEnd(self, state):
@@ -619,7 +794,7 @@ class DumbDefensiveAgent(CaptureAgent):
                             self.chasingTarget = self.getEnemyIndexBasedOnPos(state, enemyPos)
                             self.chasingDest = dest
                             if self.chasingTarget is not None:
-                                break
+                                break # break of for enemyPos in enemies:
 
         # check again, might start chasing
         if self.isChasingDD:
@@ -628,6 +803,7 @@ class DumbDefensiveAgent(CaptureAgent):
 
             # illegal state
             if lastState is None:
+                self.clearDDChasingBuff()
                 return None
 
             # can actually locate the target index (i.e. not through food)
@@ -636,10 +812,11 @@ class DumbDefensiveAgent(CaptureAgent):
                 lastChasingTargetPos = lastState.getAgentState(self.chasingTarget).getPosition()
                 nowChasingTargetPos = state.getAgentState(self.chasingTarget).getPosition()
                 lastMyPos = lastState.getAgentState(self.index).getPosition()
+                lastTeammatePos = lastState.getAgentState(self.getTeammateIndex(state)).getPosition()
 
                 # chasing the target died
                 if (lastChasingTargetPos is not None
-                and self.quickGetDistance(lastChasingTargetPos, lastMyPos) <= 3
+                and (self.quickGetDistance(lastChasingTargetPos, lastMyPos) <= 3 or self.quickGetDistance(lastChasingTargetPos, lastTeammatePos) <= 3)
                 and nowChasingTargetPos is None):
                         self.clearDDChasingBuff()
                         return None
@@ -650,19 +827,85 @@ class DumbDefensiveAgent(CaptureAgent):
             # blocking
             else:
                 #just stay if its in there
-                if self.chasingTarget is not None or util.flipcoin(0.7):
+                if self.chasingTarget is not None or util.flipcoin(0.9):
                     return Directions.STOP
                 # cannot know if its in there, so might just leave
                 else:
                     self.clearDDChasingBuff()
                     return None
 
+    # a special defensive move
+    # at most one agent should do this
+    def chaseAP(self, state):
+
+        ownState = state.getAgentState(self.index)
+
+        # currently not not chasing, find if there is any chasable enemy
+        if not self.isChasingAP or self.chasingAPTarget is None:
+
+            enemies = self.getInvadingEnemyPositions(state)
+
+            if len(enemies) > 0:
+                for enemyPos in enemies:
+                    if enemyPos in self.apEnds:
+                        destList = self.apEnds[enemyPos]
+                        if len(destList) > 0:
+                            for dest in destList:
+                                # should chase it if there is no capsule in the AP
+                                if (self.quickGetDistance(dest, ownState.getPosition()) <= self.quickGetDistance(dest, enemyPos)
+                                    and self.numCapsuleInAP[dest] == 0):
+                                    self.isChasingAP = True
+                                    self.chasingAPTarget = self.getEnemyIndexBasedOnPos(state, enemyPos)
+                                    self.chasingAPDest = dest
+                                    if self.chasingAPTarget is not None:
+                                        break  # break of for dest in destList
+
+                            # found!
+                            if self.chasingAPTarget is not None:
+                                break  # break of for enemyPos in enemies
+
+
+        # check again, might start chasing
+        if self.isChasingAP:
+
+            lastState = self.getPreviousObservation()
+
+            # illegal state
+            if lastState is None:
+                self.clearAPChasingBuff()
+                return None
+
+            # can actually locate the target index (i.e. not through food)
+            # check if the target dies
+            if self.chasingAPTarget is not None:
+                lastChasingAPTargetPos = lastState.getAgentState(self.chasingAPTarget).getPosition()
+                nowChasingAPTargetPos = state.getAgentState(self.chasingAPTarget).getPosition()
+                lastMyPos = lastState.getAgentState(self.index).getPosition()
+                lastTeammatePos = lastState.getAgentState(self.getTeammateIndex(state)).getPosition()
+
+                # chasing the target died
+                if (lastChasingAPTargetPos is not None
+                and (self.quickGetDistance(lastChasingAPTargetPos, lastMyPos) <= 3 or self.quickGetDistance(lastChasingAPTargetPos, lastTeammatePos) <= 3)
+                and nowChasingAPTargetPos is None):
+                        self.clearAPChasingBuff()
+                        return None
+
+            # just chasing
+            if ownState.getPosition != self.chasingAPDest:
+                return self.defensiveMovingToTarget(state, self.chasingAPDest)
+            # blocking
+            else:
+                #just stay if its in there
+                if self.chasingAPTarget is not None or util.flipcoin(0.9):
+                    return Directions.STOP
+                # cannot know if its in there, so might just leave
+                else:
+                    self.clearAPChasingBuff()
+                    return None
+
 
     # return a defensive action if possible
     def defend(self, state):
-
-        # TODO
-        # perform required action sequence
 
         myPos = state.getAgentState(self.index).getPosition()
 
@@ -683,6 +926,17 @@ class DumbDefensiveAgent(CaptureAgent):
 
         # no idea where are the enemies
         else:
+
+            # special area check
+            blockingAP = self.findBlockingPoint(state)
+
+            if blockingAP is not None:
+                # already at there, just stay
+                if myPos == blockingAP:
+                    return Directions.STOP
+                else:
+                    return self.hitWhatever(state, blockingAP)
+
             mostPossibleFood = self.quickFindClosetPosInList(self.enemyStartPos, self.getFoodYouAreDefending(state).asList())
             mostPossibleCapsule = self.quickFindClosetPosInList(self.enemyStartPos, self.getCapsulesYouAreDefending(state))
 
@@ -881,7 +1135,6 @@ class DumbDefensiveAgent(CaptureAgent):
             return self.goForThem(state, self.getFood(state).asList())
 
 
-
         # relatively safe foods
         for food in self.getFood(state).asList():
             if food not in self.deadEnds:
@@ -974,6 +1227,7 @@ class DumbDefensiveAgent(CaptureAgent):
         # capsule changed, recompute all the dead ends
         if len(self.getAllCapsules(state)) < len(self.lastAllCapules):
             self.computeDeadEnds(state)
+            self.computeCapsulesInAP(state)
             # eaten their capsule
             if len(self.getCapsules(state)) < len(self.lastTheirCapsules):
                 self.powerTimer = 40
@@ -1002,6 +1256,7 @@ class DumbDefensiveAgent(CaptureAgent):
         # no longer scared, but still on enemy's side
         if ownState.isPacman:
             self.clearDDChasingBuff()
+            self.clearAPChasingBuff()
             action  = self.moveBackHome(state, True)
             if action is None and ownState.getPosition() not in self.deadEnds:
                 action = self.safeRandomMove(state)
@@ -1011,6 +1266,8 @@ class DumbDefensiveAgent(CaptureAgent):
 
         else:
             action = self.chaseDeadEnd(state)
+            if action is None:
+                action = self.chaseAP(state)
             if action is None:
                 action = self.defend(state)
 
@@ -1024,6 +1281,7 @@ class DumbDefensiveAgent(CaptureAgent):
         ownState = state.getAgentState(self.index)
 
         self.clearDDChasingBuff()
+        self.clearAPChasingBuff()
 
         action = None
 
@@ -1083,6 +1341,7 @@ class DumbDefensiveAgent(CaptureAgent):
         # temporarily become offensive if scared
         if scaredTimer > 0:
             self.clearDDChasingBuff()
+            self.clearAPChasingBuff()
 
             #go home as the timer gets closer to 0
             if scaredTimer <= minDisToHome and ownState.isPacman:
@@ -1102,12 +1361,14 @@ class DumbDefensiveAgent(CaptureAgent):
         # lost too much food, no longer should defend
         if score <= (-1) * numMyFoodLeft * SCORE_RATIO:
             self.clearDDChasingBuff()
+            self.clearAPChasingBuff()
             action = self.offensiveAction(state)
 
         if action is None:
         # last moment!
             if MAX_STEP - self.step <= 15 * (abs(score) - self.numFoodMyTeamCarrying(state)) + minDisToHome and score < 0:
                 self.clearDDChasingBuff()
+                self.clearAPChasingBuff()
                 action = self.offensiveAction(state)
 
         if action is None:
@@ -1151,16 +1412,14 @@ WALKING_IN_HOME_TOWARD_FOOD_REWARD = -1
 
 WALKING_IN_HOME_BACKWARD_REWARD = -3
 
-
-
-class QOffensiveAgent(QAgent, DumbDefensiveAgent):
+class QOffensiveAgent(DumbDefensiveAgent):
 
     def __init__(self, index, alpha = ALPHA, gamma = GAMMA, epsilon = EPSILON, path = QTABLE):
 
         CaptureAgent.__init__(self, index)
-        QAgent.__init__(self, index, alpha, gamma, epsilon, path)
+        #QAgent.__init__(self, index, alpha, gamma, epsilon, path)
 
-        self.isQOffesnvie = True
+        #self.isQOffesnvie = True
 
 
     # find best target
@@ -1309,6 +1568,7 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
         self.movingSequence = []
         return None
 
+    """
     def getFeatures(self, state, action):
 
         ownState = state.getAgentState(self.index)
@@ -1487,11 +1747,13 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
                         reward = WALKING_IN_HOME_BACKWARD_REWARD
 
         return reward
+    """
 
 
     def chooseAction(self, state):
 
-        feature = None
+        #feature = None
+
         action = None
 
         # check special sequence
@@ -1507,7 +1769,6 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
         lastState = self.getPreviousObservation()
 
         """
-
         # update Q, no matter if this round is using loopBreaker
         # but if used loopBreaker last time, lastFeature will be None, thus need to be recomputed
         if self.isQOffesnvie and lastState is not None and self.lastAction is not None:
@@ -1533,11 +1794,8 @@ class QOffensiveAgent(QAgent, DumbDefensiveAgent):
         # this only update status of the dumb agent class
         self.updateMyStatus(state)
 
-        self.lastAction = action
-        self.lastFeature = feature
-
-        if action is None:
-            feature, action = self.determineAction(state)
+        #self.lastAction = action
+        #self.lastFeature = feature
 
         return action
 
@@ -1548,7 +1806,7 @@ from collections import defaultdict
 class Graph:
 
     def __init__(self,vertices):
-        self.V= vertices #No. of vertices
+        self.V = vertices #No. of vertices
         self.graph = defaultdict(list) # default dictionary to store graph
         self.Time = 0
 
@@ -1629,3 +1887,32 @@ class Graph:
                 indexList.append(index)
 
         return indexList
+
+
+def computeMaxDepth(node, graph):
+      def bfs(root):
+        visited = []
+        queue = [root]
+        while len(queue) > 0:
+          vertex = queue.pop(0)
+          if vertex not in visited:
+            visited.append(vertex)
+            queue.extend(newGraph[vertex])
+        return visited
+
+      newGraph = copy.deepcopy(graph)
+      #print newGraph
+      neighbours = newGraph[node]
+      for k, v in newGraph.iteritems():
+        if node in v:
+          newGraph[k].remove(node)
+
+      length = MAX_DISTANCE
+      result = None
+      for neighbour in neighbours:
+        tree = bfs(neighbour)
+        if len(tree) < length:
+          length = len(tree)
+          result = tree
+
+      return result

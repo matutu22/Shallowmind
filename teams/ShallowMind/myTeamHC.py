@@ -58,7 +58,7 @@ class QAgent():
     # epsilon: exploration rate
     def __init__(self, index, alpha, gamma, epsilon, path):
 
-        print "Q-Learning init"
+        #print "Q-Learning init"
 
         # CaptureAgent.__init__(self, index)
 
@@ -99,7 +99,7 @@ class QAgent():
 
     def saveQ(self):
 
-        print "Saving Q to " + self.path + "..."
+        #print "Saving Q to " + self.path + "..."
 
         with open(self.path, 'w') as f:
             json.dump({str(k): v for k, v in self.q.iteritems()}, f)
@@ -227,7 +227,6 @@ class DumbDefensiveAgent(CaptureAgent):
         self.lastPosSeq = []
 
         self.computeDeadEnds(state)
-        self.aps = [realAP for realAP in self.getArticulationNode(state) if realAP not in self.deadEnds]
 
         # IMPORTANT!!!! ESPECIALLY FOR SUBCLASS QOffensiveAgent
         random.seed(time.time())
