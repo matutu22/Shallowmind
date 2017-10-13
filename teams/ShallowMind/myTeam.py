@@ -248,7 +248,8 @@ class DumbDefensiveAgent(CaptureAgent):
             if len(v) > 0:
                 for pos in v:
                     if pos in self.apEnds:
-                        self.apEnds[pos].append(k)
+                        if k not in self.apEnds[pos]:
+                            self.apEnds[pos].append(k)
                     else:
                         self.apEnds[pos] = [k]
 
@@ -257,26 +258,6 @@ class DumbDefensiveAgent(CaptureAgent):
 
         # IMPORTANT!!!! ESPECIALLY FOR SUBCLASS QOffensiveAgent
         random.seed(time.time())
-
-        """
-        import sys
-        #print the map
-        for y in reversed(range(self.height)):
-            for x in range(self.width):
-                if self.walls[x][y]:
-                    sys.stdout.write('#')
-                #elif (x,y) in self.physicalDeadEnds:
-                    #sys.stdout.write('@')
-                elif (x,y) in self.apDict:
-                    sys.stdout.write(str(self.numCapsuleInAP[(x,y)]))
-                elif not self.walls[x][y]:
-                    sys.stdout.write(' ')
-            print ''
-        sys.stdout.flush()
-        #for x in range(1, self.width - 1):
-            #for y in range(1, self.height - 1):
-                #print (x,y) , ":", self.getLegalNeighbors((x, y))
-        """
 
 
     # return capsules of both sides
@@ -464,7 +445,7 @@ class DumbDefensiveAgent(CaptureAgent):
                 for pos in positions:
                     self.physicalDeadEnds[pos] = next
 
-    # update the number of capsules for every ap
+    # update the number of capsules in every ap
     def computeCapsulesInAP(self, state):
         self.numCapsuleInAP = {}
 
@@ -575,7 +556,7 @@ class DumbDefensiveAgent(CaptureAgent):
 
         return foodList
 
-    # if all the capsules and >= 3/5 food are in the ap, go defend there
+    # if all the capsules and >= 2/3 food are in the ap, go defend there
     def findBlockingPoint(self, state):
 
         myFoods = self.getFoodYouAreDefending(state).asList()
@@ -596,7 +577,7 @@ class DumbDefensiveAgent(CaptureAgent):
 
             if len(apFoods) > 0:
                 numFoodInBestAP = apFoods[apFoods.argMax()]
-                if numFoodInBestAP >= len(myFoods) * 3 / 5:
+                if numFoodInBestAP > len(myFoods) * 2 / 3 or len(myFoods) - numFoodInBestAP < self.getScore(state):
                     return apFoods.argMax()
 
         return None
@@ -799,6 +780,9 @@ class DumbDefensiveAgent(CaptureAgent):
         # check again, might start chasing
         if self.isChasingDD:
 
+            # clear buff for the other
+            self.clearAPChasingBuff()
+
             lastState = self.getPreviousObservation()
 
             # illegal state
@@ -868,6 +852,9 @@ class DumbDefensiveAgent(CaptureAgent):
         # check again, might start chasing
         if self.isChasingAP:
 
+            # clear buff for the other
+            self.clearDDChasingBuff()
+
             lastState = self.getPreviousObservation()
 
             # illegal state
@@ -913,7 +900,6 @@ class DumbDefensiveAgent(CaptureAgent):
 
         enemies = self.getInvadingEnemyPositions(state)
 
-
         closetEmemy = self.quickFindClosetPosInList(myPos, enemies)
 
         # no visible enemies, use their last positions
@@ -926,16 +912,6 @@ class DumbDefensiveAgent(CaptureAgent):
 
         # no idea where are the enemies
         else:
-
-            # special area check
-            blockingAP = self.findBlockingPoint(state)
-
-            if blockingAP is not None:
-                # already at there, just stay
-                if myPos == blockingAP:
-                    return Directions.STOP
-                else:
-                    return self.hitWhatever(state, blockingAP)
 
             mostPossibleFood = self.quickFindClosetPosInList(self.enemyStartPos, self.getFoodYouAreDefending(state).asList())
             mostPossibleCapsule = self.quickFindClosetPosInList(self.enemyStartPos, self.getCapsulesYouAreDefending(state))
@@ -1265,6 +1241,17 @@ class DumbDefensiveAgent(CaptureAgent):
                 self.hitWhatever(state, self.deadEnds[ownState.getPosition()])
 
         else:
+
+            # special area check
+            blockingAP = self.findBlockingPoint(state)
+
+            if blockingAP is not None:
+                # already at there, just stay
+                if ownState.getPosition() == blockingAP:
+                    return Directions.STOP
+                else:
+                    return self.hitWhatever(state, blockingAP)
+
             action = self.chaseDeadEnd(state)
             if action is None:
                 action = self.chaseAP(state)
