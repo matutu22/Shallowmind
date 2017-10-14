@@ -160,6 +160,51 @@ class QAgent():
 
         util.raiseNotDefined()
 
+"""
+# approximate Q-Learning agent based on linear function
+class LinearQAgent(QAgent):
+
+    def registerInitialState(self, gameState):
+
+        CaptureAgent.registerInitialState(self, gameState)
+
+        self.lastAction = None
+        self.cachedDistance = {}
+
+        self.loadW()
+
+    def loadW(self):
+        self.w = util.Counter()
+
+        with open(self.path) as f:
+            tmp = json.load(f)
+            for k,v in tmp.iteritems():
+                self.w[k] = v
+
+    def saveW(self):
+        print "Saving W to " + self.path + "..."
+
+        with open(self.path, 'w') as f:
+            json.dump({k: v for k, v in self.w.iteritems()}, f)
+
+    def getQValue(self, features):
+        q = 0;
+
+        for k, v in features.iteritems():
+            q += self.w[k] * v
+
+        return q
+
+    def update(self, oldState, action, newState, reward):
+
+        oldFeature = self.getFeatures(oldState, action)
+
+        oldQ = self.getQValue(oldFeature)
+        newQ = self.getQMax(self.getQKeys(newState))
+
+        for k, v in oldFeature.iteritems():
+            self.w[k] += self.alpha * (reward + self.gamma * newQ - oldQ) * v
+"""
 
 MAX_DISTANCE = 999999
 
@@ -1130,6 +1175,15 @@ class DumbDefensiveAgent(CaptureAgent):
     # return a more offensive action, likely to get eaten
     def offendAtRisk(self, state):
 
+        myPos = state.getAgentState(self.index).getPosition()
+        closetGhost = self.quickFindClosetPosInList(myPos, self.getUnscaredGhostEnemyPositions(state))
+
+        if closetGhost is not None:
+            minDisToGhost = self.quickGetDistance(myPos, closetGhost)
+            # way too unsafe
+            if minDisToGhost <= MAX_HIT_DISTANCE:
+                return None
+
         return self.goForThem(state,self.getFood(state).asList())
 
     # return an action to go home
@@ -1263,7 +1317,8 @@ class DumbDefensiveAgent(CaptureAgent):
 
         return action
 
-    def offensiveAction(self, state):
+    # if alwaysReturnValue == true, return safeRandomMove when there is no other choice
+    def offensiveAction(self, state, alwaysReturnValue = True):
 
         ownState = state.getAgentState(self.index)
 
@@ -1305,8 +1360,8 @@ class DumbDefensiveAgent(CaptureAgent):
         if action is None and ownState.numCarrying > 0:
             action  = self.moveBackHome(state, True)
 
-        if action is None:
-                action = self.safeRandomMove(state)
+        if action is None and alwaysReturnValue:
+            action = self.safeRandomMove(state)
 
         return action
 
@@ -1317,7 +1372,9 @@ class DumbDefensiveAgent(CaptureAgent):
 
         numMyFoodLeft = len(self.getFoodYouAreDefending(state).asList())
 
-        minDisToHome = self.quickGetDistance(ownState.getPosition(), self.quickFindClosetPosInList(ownState.getPosition(), self.homes))
+        closetHome = self.quickFindClosetPosInList(ownState.getPosition(), self.homes)
+
+        minDisToHome = self.quickGetDistance(ownState.getPosition(), closetHome)
 
         score = self.getScore(state)
 
@@ -1336,7 +1393,7 @@ class DumbDefensiveAgent(CaptureAgent):
 
             # no need to go home, or failed to find a safe way
             if action is None:
-                action = self.offensiveAction(state)
+                action = self.offensiveAction(state, False)
 
             # no way, but not in dead ends neither
             if action is None and ownState.getPosition() not in self.deadEnds:
@@ -1349,14 +1406,18 @@ class DumbDefensiveAgent(CaptureAgent):
         if score <= (-1) * numMyFoodLeft * SCORE_RATIO:
             self.clearDDChasingBuff()
             self.clearAPChasingBuff()
-            action = self.offensiveAction(state)
+            action = self.offensiveAction(state, False)
+            if action is None:
+                action = self.hitWhatever(state, closetHome)
 
         if action is None:
         # last moment!
             if MAX_STEP - self.step <= 15 * (abs(score) - self.numFoodMyTeamCarrying(state)) + minDisToHome and score < 0:
                 self.clearDDChasingBuff()
                 self.clearAPChasingBuff()
-                action = self.offensiveAction(state)
+                action = self.offensiveAction(state, False)
+                if action is None:
+                    action = self.hitWhatever(state, closetHome)
 
         if action is None:
             action = self.defensiveAction(state)
