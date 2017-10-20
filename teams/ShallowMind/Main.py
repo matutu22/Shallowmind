@@ -1847,6 +1847,286 @@ class QOffensiveAgent(DumbDefensiveAgent):
 
         return action
 
+
+class DefensiveAgent(QAgent):
+
+    def __init__(self, index, episodeCount = 1000, alpha = 0.2, gamma = 0.8, epsilon = 0.05, path = "defense.txt"):
+
+        QAgent.__init__(self, index, episodeCount, alpha, gamma, epsilon, path)
+
+        print "Init Defense"
+
+    def determineAction(self, state):
+        # epsilon-greedy explore
+        agentPosition = state.getAgentPosition(self.index)
+
+
+        if (util.flipCoin(self.epsilon)):
+            actions = state.getLegalActions(self.index)
+            actions.remove("Stop")
+            move = random.choice(actions)
+            if self.red and agentPosition[0] == state.data.layout.width / 2.0:#TODO: pos is at border
+                if move == Directions.EAST:
+                    move = Directions.STOP
+            elif not self.red and agentPosition[0] == state.data.layout.width / 2.0 + 1:
+                if move == Directions.WEST:
+                    move = Directions.STOP
+
+            return move
+
+        qKeys = self.getQKeys(state)
+        for key in qKeys:
+            if key[1] == 'Stop':
+                qKeys.remove(key)
+
+        maxQ = self.getQMax(qKeys)
+        bestActions = [key[1] for key in qKeys if self.getQValue(key[0]) == maxQ]
+
+        #best = [key for key in qKeys if self.getQValue(key[0]) == maxQ]
+
+        #print best, maxQ
+        move = random.choice(bestActions)
+        if self.red and agentPosition[0] == state.data.layout.width / 2.0:#TODO: pos is at border
+            if move == Directions.EAST:
+                move = Directions.STOP
+        elif not self.red and agentPosition[0] == state.data.layout.width / 2.0 + 1:
+            if move == Directions.WEST:
+                move = Directions.STOP
+        return move
+
+# return position of foods that were in old but not in new
+    def compareFoods(self, old, new):
+        foodList = []
+
+        for x in range(old.width):
+            for y in range(old.height):
+                if old[x][y] and not new[x][y]:
+                    foodList.append((x, y))
+
+        return foodList
+
+
+    def minEnemy(self, state, position):
+        opponents = [state.getAgentState(i) for i in self.getOpponents(state)]
+
+        # Min Distance to Enemy
+        minDisToEnemy = 6
+        minE = None
+        for opponent in opponents:
+            if opponent and opponent.isPacman and opponent.getPosition() is not None:
+                d = self.quickGetDistance(opponent.getPosition(), position)
+                if d < minDisToEnemy:
+                    minDisToEnemy = d
+                    minE = opponent.getPosition()
+        return minDisToEnemy, minE
+
+    def getfarestFood(self, state, enemyP):
+        #Get the farest food I can protect
+        # May be enemy's target
+
+
+        myFoods = self.getFoodYouAreDefending(state).asList()
+        farestFood = None
+        maxD = 99
+        if enemyP:
+            for food in myFoods:
+                d= self.quickGetDistance(enemyP, state.getAgentState(self.index).getPosition())
+                if d <= maxD:
+                    maxD = d 
+                    farestFood = food
+            return farestFood
+
+        maxX = -1
+        minX = 999999
+        for myfood in myFoods:
+            if state.isOnRedTeam(self.index):
+                if myfood[0] > maxX:
+                    farestFood = myfood
+            else:
+                if myfood[0] < minX:
+                    farestFood = myfood
+        return farestFood
+
+    def getFeatures(self, state, action):
+
+        #features = util.Counter()
+        myFoods = self.getFoodYouAreDefending(state).asList()
+        foodlist = self.getFood(state).asList()
+
+        successor = self.getSuccessor(state, action)
+        nextP = successor.getAgentState(self.index).getPosition()
+        currentP = state.getAgentState(self.index).getPosition()
+        minDisToEnemy, closestEnemy = self.minEnemy(state, nextP)
+
+        possibleEnemy = self.compareFoods(self.getFoodYouAreDefending(state), self.getFoodYouAreDefending(successor))
+        # if possibleEnemy:
+        #     if not closestEnemy:
+        #         closestEnemy = possibleEnemy[0]
+        #         minDisToEnemy = self.quickGetDistance(nextP, closestEnemy)
+
+        #opponents = self.getEnemyPosition(state)
+        #numofEnemy = len(opponents)
+        foodCanProtect = []
+        for food in myFoods:
+            if self.quickGetDistance(nextP, food) <= 5:
+                foodCanProtect.append(food)
+        protectRange = len(foodCanProtect)
+        protectRatio = int((protectRange / len(myFoods)) * 10)
+        chasingEnemy = 0
+
+        enemyDirection = 0
+        if closestEnemy:
+            x = closestEnemy[0] - nextP[0]
+            y = closestEnemy[1] - nextP[1]
+            if x >0 and y >=0:
+                enemyDirection = 1
+            elif x <=0 and y >0:
+                enemyDirection = 2
+            elif x <0 and y <=0:
+                enemyDirection = 3
+            else:
+                enemyDirection = 4
+            chasingEnemy = 1 if self.quickGetDistance(closestEnemy, nextP) <= self.quickGetDistance(closestEnemy, currentP) else 0
+
+        # currentCap = None
+        # disToCap = 99
+        # if self.getCapsulesYouAreDefending(state):
+        #     currentCap = self.getCapsulesYouAreDefending(state)[0]
+        # if currentCap:
+        #     disToCap = self.quickGetDistance(currentCap, nextP)
+        # canProtectCap = 1 if disToCap <= 5 else 0
+        #Is Scared
+        scared = 1 if self.isScared(state,self.index) else 0
+
+        # No of Next state's actions
+        numNextLegalAction = len(successor.getLegalActions(self.index))
+
+        willeatEnemy = willbeEaten = 0
+        if scared == 1:
+            if nextP == closestEnemy:
+                willbeEaten = 1
+        else:
+            if nextP == closestEnemy:
+                willeatEnemy = 1
+
+        farestFood = self.getfarestFood(state, closestEnemy)
+        protectTarget = 0
+        if farestFood:
+            x = farestFood[0] - nextP[0]
+            y = farestFood[1] - nextP[1]
+            if x >0 and y >=0:
+                protectTarget = 1
+            elif x <=0 and y >0:
+                protectTarget = 2
+            elif x <0 and y <=0:
+                protectTarget = 3
+            else:
+                protectTarget = 4
+
+        minDisToFarest = 0
+        if farestFood:
+            minDisToFarest = self.quickGetDistance(nextP, farestFood)
+
+        # minDisToDot = min([self.quickGetDistance(nextP, food) for food in myFoods])
+
+        # numOfProtecting = int((len(myFoods) / self.initialMyfood) *10)
+        # numofFoodtoeat = len(foodlist) / self.initialFood
+
+
+        ##############
+
+        # its linear q agent
+        # if issubclass(self.__class__, LinearQAgent):
+        #     features = None
+        # else:
+        #     features = (minDisToEnemy, numNextLegalAction, scared)
+        features = (minDisToFarest, protectTarget, scared, minDisToEnemy, chasingEnemy, 
+            enemyDirection, protectRange, willeatEnemy, willbeEaten)
+        return features
+
+
+            #todo
+    def determineReward(self, oldState, oldAction, newState):
+        currentP         = newState.getAgentPosition(self.index)
+        lastP            = oldState.getAgentPosition(self.index)
+        currentOpponents = [newState.getAgentState(i) for i in self.getOpponents(newState)]
+        pastOpponents    = [oldState.getAgentState(i) for i in self.getOpponents(oldState)]
+
+        # currentCap = None
+        # if self.getCapsulesYouAreDefending(newState):
+        #     currentCap = self.getCapsulesYouAreDefending(newState)[0]
+
+        minCurrentDisToOp, closestEnemy = self.minEnemy(newState, currentP)
+        minLastDisToOp, nouse   = self.minEnemy(oldState, lastP)
+
+        # possibleEnemy = self.compareFoods(self.getFoodYouAreDefending(oldState), self.getFoodYouAreDefending(newState))
+        # if possibleEnemy:
+        #     if not closestEnemy:
+        #         closestEnemy = possibleEnemy[0]
+
+        #Default, nothing special move
+        reward = -1
+
+        # Cross border
+        if newState.data.agentStates[self.index].isPacman:
+            reward -= 100
+
+        myFoods = self.getFoodYouAreDefending(newState).asList()
+        farestFood = self.getfarestFood(newState, closestEnemy)
+        # Close to farest food
+        print "Farest Food,", farestFood
+        if farestFood:
+            if self.quickGetDistance(currentP, farestFood) <= 3:
+                reward += 3
+
+        # bool2 = True
+        # if currentCap:
+        #     bool2 = self.quickGetDistance(lastP, currentCap) >= self.quickGetDistance(currentP, currentCap)
+        #     if self.quickGetDistance(currentCap, farestFood) <= 3 and currentP[0]-currentCap[0]<=5:
+                
+        #         reward += 2
+
+        bool1 = self.quickGetDistance(lastP, farestFood) >= self.quickGetDistance(currentP, farestFood)
+        if bool1 :
+            reward += 1
+
+        meetEnemy = False
+        if closestEnemy:
+            # minCurrentDisToOp = self.quickGetDistance(currentP, closestEnemy)
+            # minLastDisToOp = self.quickGetDistance(lastP, closestEnemy)
+            if newState.getAgentPosition(self.index) == closestEnemy:
+                meetEnemy = True
+        # else:
+        #     for opponent in currentOpponents:
+        #         if opponent and opponent.isPacman and opponent.getPosition() is not None:
+        #             if newState.getAgentPosition(self.index) == opponent.getPosition():
+        #                 meetEnemy = True
+
+        # meetEnemy = newState.getAgentPosition(self.index) in currentOpponents
+        if self.isScared(newState, self.index):
+            # Eaten
+            if meetEnemy:
+                print "Eaten by enemy"
+                reward -= 500
+            # Chasing
+            elif minCurrentDisToOp >= minLastDisToOp and minLastDisToOp != 6:
+                print "Running from enemy"
+                reward += 10
+        else:
+            #Eat enemy
+            if meetEnemy:
+                print "Eat enemy"
+                reward += 500
+            elif minCurrentDisToOp < minLastDisToOp :
+                print "Chasing enemy"
+                reward += 10
+            elif minCurrentDisToOp >= minLastDisToOp and minLastDisToOp != 6:
+                print "Fail Chasing enemy"
+                reward -= 10
+        print reward
+        return reward
+      
+      
 from collections import defaultdict
 
 #This class represents an undirected graph
